@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Platform Launcher</title>
+<style>
+  :root {
+    --pitch: #1c5c2e;
+    --pitch-line: #ebf0eb;
+    --team-a: #3884ff;
+    --team-b: #f05448;
+    --bg: #12151a;
+    --panel: #1a1f27;
+    --panel-2: #222833;
+    --edge: #2e3644;
+    --text: #e6eaf0;
+    --muted: #8d97a8;
+    --good: #7ce0a0;
+    --bad: #ff8a7a;
+    --warn: #ffd640;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 28px 20px 60px; }
+
+  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 21px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13.5px; }
+
+  .env { display: flex; gap: 16px; flex-wrap: wrap; margin: 14px 0 24px; font-size: 12.5px; color: var(--muted); }
+  .env span::before { content: "●"; margin-right: 6px; }
+  .env .ok::before { color: var(--good); }
+  .env .no::before { color: var(--bad); }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 18px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.09em;
+             color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 0 0 5px; }
+  select, input {
+    width: 100%; padding: 9px 10px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--edge); border-radius: 6px; font: inherit; font-size: 14px;
+  }
+  select:focus, input:focus { outline: 2px solid var(--team-a); outline-offset: -1px; }
+
+  .team-a-accent { border-left: 3px solid var(--team-a); padding-left: 12px; }
+  .team-b-accent { border-left: 3px solid var(--team-b); padding-left: 12px; }
+
+  .row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .field + .field { margin-top: 13px; }
+
+  .actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 20px; }
+  button {
+    padding: 12px 14px; border-radius: 7px; border: 1px solid var(--edge);
+    background: var(--panel-2); color: var(--text); font: inherit; font-weight: 600;
+    font-size: 14px; cursor: pointer; text-align: left; line-height: 1.25;
+  }
+  button:hover:not(:disabled) { border-color: var(--team-a); background: #262d3a; }
+  button:disabled { opacity: 0.45; cursor: progress; }
+  button .hint { display: block; font-weight: 400; font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  button.primary { background: var(--pitch); border-color: #2c7a41; }
+  button.primary:hover:not(:disabled) { background: #24703a; border-color: var(--good); }
+
+  #status { margin-top: 20px; min-height: 22px; font-size: 13.5px; }
+  #status.err { color: var(--bad); }
+  #status.ok { color: var(--good); }
+  #status.busy { color: var(--warn); }
+
+  .out { margin-top: 18px; }
+  pre {
+    background: #0d1014; border: 1px solid var(--edge); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.5;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace; margin: 0;
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--edge); }
+  th:first-child, td:first-child { text-align: left; color: var(--muted); font-weight: 400; }
+  thead th { color: var(--muted); font-size: 11.5px; text-transform: uppercase;
+             letter-spacing: 0.07em; font-weight: 600; }
+  .score { font-size: 30px; font-weight: 700; text-align: center; margin: 4px 0 18px;
+           font-variant-numeric: tabular-nums; }
+  .score .a { color: var(--team-a); } .score .b { color: var(--team-b); }
+  .score .names { display: block; font-size: 13px; font-weight: 400; color: var(--muted); margin-top: 4px; }
+  .indent td:first-child { padding-left: 26px; color: #6f7a8c; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Soccer Platform Launcher</h1>
+    <span class="sub">pick two teams, press a button</span>
+  </header>
+  <div class="env" id="env"></div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Teams</h2>
+      <div class="field team-a-accent">
+        <label for="teamA">Team A — attacks right</label>
+        <select id="teamA"></select>
+      </div>
+      <div class="field team-b-accent">
+        <label for="teamB">Team B — attacks left</label>
+        <select id="teamB"></select>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Match</h2>
+      <div class="row">
+        <div>
+          <label for="seed">Seed</label>
+          <input id="seed" type="number" value="1234" min="0">
+        </div>
+        <div>
+          <label for="ticks">Ticks</label>
+          <input id="ticks" type="number" value="2400" min="20" step="100">
+        </div>
+        <div>
+          <label for="speed">View speed</label>
+          <select id="speed">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="4" selected>4×</option>
+            <option value="8">8×</option>
+            <option value="16">16×</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="margin-top:13px">
+        <div style="grid-column: span 2" id="viewerField">
+          <label for="viewer">Viewer — for live and record modes</label>
+          <select id="viewer">
+            <option value="browser" selected>Browser (opens a tab)</option>
+            <option value="godot">Godot &mdash; flat (separate window)</option>
+            <option value="godot-iso">Godot &mdash; isometric voxel</option>
+          </select>
+        </div>
+        <div>
+          <!-- Seeds, not matches: every seed is played from both ends, so a
+               batch is twice this many games. Labelled for what you type. -->
+          <label for="matches">Seeds — for evaluation</label>
+          <input id="matches" type="number" value="20" min="2" max="500">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" data-action="headless">
+      Play headless
+      <span class="hint">Fastest. No window, just the numbers.</span>
+    </button>
+    <button data-action="replay">
+      Record &amp; watch
+      <span class="hint">Play it, save it, open it in the viewer.</span>
+    </button>
+    <button data-action="live">
+      Live view
+      <span class="hint">Watch it as it plays. Baselines only.</span>
+    </button>
+    <button data-action="batch">
+      Evaluate over seeds
+      <span class="hint">Any teams. Both ends, alternating kickoff, with a CI.</span>
+    </button>
+  </div>
+
+  <div id="status"></div>
+  <div class="out" id="out"></div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status");
+const outEl = $("out");
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = kind || "";
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+// -- environment ------------------------------------------------------------
+
+async function loadEnvironment() {
+  const response = await fetch("/api/environment");
+  const env = await response.json();
+
+  const submissions = env.submissions || [];
+  const teams = [...env.baselines, ...env.examples, ...submissions];
+  for (const id of ["teamA", "teamB"]) {
+    const select = $(id);
+    select.innerHTML = "";
+    // Your own teams first: they are what you came here to watch, and a list
+    // that opens on the reference teams buries them under nine names.
+    if (submissions.length) {
+      const yours = document.createElement("optgroup");
+      yours.label = "Your teams";
+      for (const entry of submissions) {
+        yours.appendChild(new Option(entry.label, entry.path));
+      }
+      select.appendChild(yours);
+    }
+    const baselines = document.createElement("optgroup");
+    baselines.label = "Reference teams";
+    for (const name of env.baselines) {
+      baselines.appendChild(new Option(name, name));
+    }
+    select.appendChild(baselines);
+    if (env.examples.length) {
+      const examples = document.createElement("optgroup");
+      examples.label = "Example submissions";
+      for (const path of env.examples) {
+        examples.appendChild(new Option(path.split("/").pop(), path));
+      }
+      select.appendChild(examples);
+    }
+  }
+  // Open on "your team against the reference opponent" when there is a team of
+  // your own, which is the match a student runs over and over.
+  $("teamA").value = submissions.length ? submissions[0].path : "structured_attack";
+  $("teamB").value = "balanced";
+
+  // Godot is optional, and in the student distribution it is absent by
+  // design. Where it is absent it is not mentioned at all: a status chip
+  // reporting something missing that was never meant to be there reads as a
+  // fault, and there is nothing for the reader to do about it.
+  $("env").innerHTML =
+    `<span class="${env.cli ? "ok" : "no"}">engine ${env.cli ? "ready" : escapeHtml(env.cli_error || "missing")}</span>` +
+    `<span class="ok">browser viewer ready</span>` +
+    (env.godot ? `<span class="ok">godot ready</span>` : "") +
+    `<span class="ok">${teams.length} teams</span>`;
+
+  if (!env.godot) {
+    // Both Godot entries go: the isometric one is a Godot view, not a third
+    // kind of viewer, so it is exactly as unavailable as the flat one.
+    for (const value of ["godot", "godot-iso"]) {
+      const option = $("viewer").querySelector(`option[value="${value}"]`);
+      if (option) option.remove();
+    }
+    // A dropdown with one entry is a control that cannot be operated.
+    const field = $("viewerField");
+    if (field && $("viewer").options.length < 2) field.style.display = "none";
+  }
+}
+
+// -- rendering results ------------------------------------------------------
+
+function statRows(result) {
+  const [a, b] = result.stats;
+  const ticks = Math.max(result.ticks, 1);
+  const pct = (v) => (v * 100 / ticks).toFixed(1) + "%";
+  const mean = (total, count) => (count ? (total / count).toFixed(1) : "—");
+  const rate = (part, whole) => (whole ? (part * 100 / whole).toFixed(1) + "%" : "—");
+  // Attempts reconcile as completed + intercepted + uncollected.
+  const uncollected = (s) =>
+    Math.max(s.passes_attempted - s.passes_completed - s.passes_intercepted, 0);
+  const latency = (s) => (s.decision_time_ms.count
+    ? (s.decision_time_ms.total_ms / s.decision_time_ms.count).toFixed(3) : "0.000");
+
+  return [
+    ["possession", pct(a.possession_ticks), pct(b.possession_ticks)],
+    ["ball at feet", pct(a.controlled_ticks), pct(b.controlled_ticks)],
+    ["territory", pct(a.territory_ticks), pct(b.territory_ticks)],
+    ["shots", a.shots, b.shots],
+    ["shots blocked", a.shots_blocked || 0, b.shots_blocked || 0],
+    ["passes completed", `${a.passes_completed}/${a.passes_attempted}`,
+                         `${b.passes_completed}/${b.passes_attempted}`],
+    ["intercepted", a.passes_intercepted, b.passes_intercepted, true],
+    ["uncollected", uncollected(a), uncollected(b), true],
+    ["mean pass length", mean(a.pass_distance, a.passes_completed),
+                         mean(b.pass_distance, b.passes_completed), true],
+    ["dribbles", a.dribbles, b.dribbles],
+    ["mean dribble length", mean(a.dribble_distance, a.dribbles),
+                            mean(b.dribble_distance, b.dribbles), true],
+    ["tackles won", `${a.tackles_won}/${a.tackles_attempted}`,
+                    `${b.tackles_won}/${b.tackles_attempted}`],
+    ["success rate", rate(a.tackles_won, a.tackles_attempted),
+                     rate(b.tackles_won, b.tackles_attempted), true],
+    ["turnovers", a.turnovers, b.turnovers],
+    // Kickoff encroachment: the only foul in the game, and there is a
+    // "fewest fouls per game" award, so it is not an incidental number.
+    ["fouls", a.fouls || 0, b.fouls || 0],
+    ["policy errors", a.policy_errors, b.policy_errors],
+    ["policy timeouts", a.policy_timeouts, b.policy_timeouts],
+    ["decision mean (ms)", latency(a), latency(b)],
+  ];
+}
+
+function renderResult(result) {
+  const names = result.team_ids;
+  const rows = statRows(result).map(([label, x, y, indent]) =>
+    `<tr class="${indent ? "indent" : ""}"><td>${escapeHtml(label)}</td>` +
+    `<td>${escapeHtml(x)}</td><td>${escapeHtml(y)}</td></tr>`).join("");
+
+  const reason = typeof result.terminal_reason === "string"
+    ? result.terminal_reason
+    : Object.keys(result.terminal_reason)[0];
+
+  outEl.innerHTML = `
+    <div class="card">
+      <div class="score">
+        <span class="a">${result.score[0]}</span> – <span class="b">${result.score[1]}</span>
+        <span class="names">${escapeHtml(names[0])} vs ${escapeHtml(names[1])}</span>
+      </div>
+      <table>
+        <thead><tr><th></th><th>${escapeHtml(names[0])}</th><th>${escapeHtml(names[1])}</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p class="sub" style="margin-top:14px">
+        ${result.ticks} ticks, ended ${escapeHtml(reason)} ·
+        seed ${result.seed} · engine ${escapeHtml(result.engine_version)} ·
+        config ${escapeHtml(result.config_hash)}
+      </p>
+    </div>`;
+}
+
+// A team travels as the specification the SDK loads, which for a submission is
+// an absolute path to team.py. Nobody calls their team that: the folder is the
+// name on screen, and a baseline is already its own name.
+function shortTeamName(spec) {
+  const text = String(spec);
+  if (!/[\\/]/.test(text)) return text;
+  const parts = text.replace(/\\/g, "/").replace(/:[A-Za-z_]\w*$/, "").split("/");
+  const file = parts.pop() || text;
+  const folder = parts.pop();
+  return file === "team.py" && folder ? folder : file.replace(/\.py$/, "");
+}
+
+function batchRows(report) {
+  const [a, b] = report.summary.team_stats;
+  // A seed set has no single scoreline, so every count is per match and every
+  // share is a fraction of the batch. Reading one of these as a match total is
+  // the mistake worth designing out, hence the units in the labels.
+  // Every cell tolerates a missing value: a batch that produced no results at
+  // all still has a shape, and a table of NaN is a worse way to learn that
+  // than a table of zeroes next to a record of 0-0-0.
+  const pct = (v) => ((v || 0) * 100).toFixed(1) + "%";
+  const num = (v, places = 2) => (v || 0).toFixed(places);
+  const count = (v) => String(v || 0);
+  const passes = (s) =>
+    `${num(s.passes_completed_per_match, 1)}/${num(s.passes_attempted_per_match, 1)}`;
+  const tackles = (s) =>
+    `${num(s.tackles_won_per_match, 1)}/${num(s.tackles_attempted_per_match, 1)}`;
+
+  return [
+    ["goals per match", num(a.goals_per_match), num(b.goals_per_match)],
+    ["possession", pct(a.possession_fraction), pct(b.possession_fraction)],
+    ["ball at feet", pct(a.control_fraction), pct(b.control_fraction), true],
+    ["territory", pct(a.territory_fraction), pct(b.territory_fraction)],
+    ["shots per match", num(a.shots_per_match, 1), num(b.shots_per_match, 1)],
+    ["blocked", num(a.shots_blocked_per_match, 1), num(b.shots_blocked_per_match, 1), true],
+    ["passes per match", passes(a), passes(b)],
+    ["completion", pct(a.pass_completion), pct(b.pass_completion), true],
+    ["intercepted", num(a.passes_intercepted_per_match, 1),
+                    num(b.passes_intercepted_per_match, 1), true],
+    ["uncollected", num(a.passes_uncollected_per_match, 1),
+                    num(b.passes_uncollected_per_match, 1), true],
+    ["mean pass length", num(a.mean_pass_distance, 1), num(b.mean_pass_distance, 1), true],
+    ["dribbles per match", num(a.dribbles_per_match, 1), num(b.dribbles_per_match, 1)],
+    ["mean dribble length", num(a.mean_dribble_distance, 1),
+                            num(b.mean_dribble_distance, 1), true],
+    ["tackles per match", tackles(a), tackles(b)],
+    ["success rate", pct(a.tackle_success), pct(b.tackle_success), true],
+    ["turnovers per match", num(a.turnovers_per_match, 1), num(b.turnovers_per_match, 1)],
+    ["fouls per match", num(a.fouls_per_match, 2), num(b.fouls_per_match, 2)],
+    ["policy errors", count(a.policy_errors), count(b.policy_errors)],
+    ["policy timeouts", count(a.policy_timeouts), count(b.policy_timeouts)],
+    ["decision mean (ms)", num(a.decision_mean_ms, 3), num(b.decision_mean_ms, 3)],
+    ["decision slowest (ms)", num(a.decision_max_ms, 3), num(b.decision_max_ms, 3), true],
+  ];
+}
+
+function renderBatch(report) {
+  const s = report.summary;
+  const names = [report.team_a, report.team_b].map(shortTeamName);
+  const winRate = s.matches ? (s.team_a_wins * 100 / s.matches).toFixed(1) : "0.0";
+  const rows = batchRows(report).map(([label, x, y, indent]) =>
+    `<tr class="${indent ? "indent" : ""}"><td>${escapeHtml(label)}</td>` +
+    `<td>${escapeHtml(x)}</td><td>${escapeHtml(y)}</td></tr>`).join("");
+
+  // A mean goal difference whose interval straddles zero is not evidence of a
+  // better team, and that is the single most misread number here — so it is
+  // said in words rather than left for the reader to work out.
+  const diff = s.mean_goal_difference;
+  const ci = s.goal_difference_ci95;
+  const decisive = Math.abs(diff) > ci && ci > 0;
+  const verdict = !s.matches ? ""
+    : decisive
+      ? `${escapeHtml(names[diff > 0 ? 0 : 1])} is ahead by more than the noise`
+      : "too close to call over this many seeds — try more";
+
+  const failures = (report.results || []).length
+    ? `<p class="sub" style="margin-top:10px">
+         ${report.results.length} match(es) failed at the platform level:
+         ${escapeHtml(report.results.map((r) => r.platform_error).join("; "))}
+       </p>`
+    : "";
+
+  outEl.innerHTML = `
+    <div class="card">
+      <div class="score">
+        <span class="a">${s.team_a_wins}</span> –
+        <span>${s.draws}</span> –
+        <span class="b">${s.team_b_wins}</span>
+        <span class="names">${escapeHtml(names[0])} vs ${escapeHtml(names[1])} ·
+          W–D–L over ${s.matches} matches</span>
+      </div>
+      <p class="sub" style="margin:2px 0 14px">
+        win rate ${winRate}% · goals ${s.goals[0]}–${s.goals[1]} ·
+        goal difference ${diff >= 0 ? "+" : ""}${diff.toFixed(3)}
+        &plusmn; ${ci.toFixed(3)} (95% CI)${verdict ? " · " + verdict : ""}
+      </p>
+      <table>
+        <thead><tr><th></th><th>${escapeHtml(names[0])}</th><th>${escapeHtml(names[1])}</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${failures}
+      <p class="sub" style="margin-top:14px">
+        every seed played from both ends with alternating kickoff ·
+        ${report.workers} workers, ${(report.wall_time_ms / 1000).toFixed(1)} s ·
+        engine ${escapeHtml(report.engine_version)} ·
+        config ${escapeHtml(report.config_hash)}
+      </p>
+    </div>`;
+}
+
+function renderText(text) {
+  outEl.innerHTML = `<pre>${escapeHtml(text.trimEnd())}</pre>`;
+}
+
+// -- launching --------------------------------------------------------------
+
+async function launch(action) {
+  const buttons = document.querySelectorAll("button[data-action]");
+  buttons.forEach((b) => (b.disabled = true));
+  setStatus("running…", "busy");
+
+  try {
+    const response = await fetch("/api/launch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action,
+        team_a: $("teamA").value,
+        team_b: $("teamB").value,
+        seed: $("seed").value,
+        ticks: $("ticks").value,
+        speed: $("speed").value,
+        matches: $("matches").value,
+        // The isometric option is a Godot viewer with a different view, not a
+        // third kind of viewer, so it is split into the two the server takes.
+        viewer: $("viewer").value === "browser" ? "browser" : "godot",
+        godot_view: $("viewer").value === "godot-iso" ? "iso" : "flat",
+      }),
+    });
+    const data = await response.json();
+
+    if (!data.ok) {
+      setStatus(data.error, "err");
+      outEl.innerHTML = "";
+      return;
+    }
+    if (data.kind === "result") renderResult(data.result);
+    else if (data.kind === "batch") renderBatch(data.report);
+    else if (data.kind === "text") renderText(data.output);
+    else outEl.innerHTML = "";
+    // The browser viewer is a page on this server, so open it in a new tab.
+    if (data.open) window.open(data.open, "_blank");
+    setStatus(data.message || "done", "ok");
+  } catch (error) {
+    setStatus("could not reach the launcher — is server.py still running?", "err");
+  } finally {
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+
+document.querySelectorAll("button[data-action]").forEach((button) => {
+  button.addEventListener("click", () => launch(button.dataset.action));
+});
+
+loadEnvironment().catch(() => setStatus("could not load the environment", "err"));
+</script>
+</body>
+</html>

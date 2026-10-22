@@ -1,0 +1,2263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Soccer Viewer</title>
+<style>
+  :root {
+    --team-a: #3884ff;
+    --team-b: #f05448;
+    --bg: #12151a;
+    --panel: rgba(0, 0, 0, 0.5);
+    --edge: #2e3644;
+    --text: #e6eaf0;
+    --muted: #8d97a8;
+    --good: #7ce0a0;
+    --bad: #ff8a7a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  /* One column: the scoreboard, the pitch, the player panel and the controls,
+     each the full width. There was a diagnostics column beside the scoreboard
+     once, but every line it carried is read off the scoreboard, the speed
+     selector or the scrubber instead. */
+  body {
+    margin: 0; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    /* The pitch row takes whatever is left over, unless the viewer has set a
+       height by hand — see the resize grip. --pitch-row is the one override,
+       and every layout below states its own default in the fallback. */
+    grid-template-rows: auto var(--pitch-row, minmax(0, 1fr)) auto auto auto auto;
+    grid-template-areas:
+      "score"
+      "pitch"
+      "grip"
+      "player"
+      "controls"
+      "log";
+    gap: 12px; padding: 12px;
+  }
+  /* A pitch sized by hand can be taller than the window, so the page scrolls
+     rather than clipping the panels under it — and when it is shorter, the
+     leftover height gathers at the bottom instead of being shared out between
+     the rows, which would open a gap under every panel. */
+  body.pitch-sized {
+    height: auto; min-height: 100%; overflow-y: auto; align-content: start;
+  }
+  #stage {
+    grid-area: pitch; position: relative; min-width: 0; min-height: 0;
+    overflow: hidden; border: 1px solid var(--edge); border-radius: 10px;
+    background: #0e1116;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+
+  /* The scoreboard: the one thing anyone glances at, so it gets the place the
+     eye goes to first and nothing else competes for it. It spans the row and
+     centres in it, which puts it on the same vertical as the field's centre
+     line, since the canvas below spans the same width. */
+  .scoreboard {
+    grid-area: score; position: relative;
+    align-self: center; justify-self: center;
+    background: rgba(10, 13, 18, 0.82); border: 1px solid var(--edge);
+    border-radius: 10px; padding: 8px 18px 7px; pointer-events: none;
+    text-align: center; backdrop-filter: blur(3px);
+    font-variant-numeric: tabular-nums; min-width: 340px;
+    width: min(560px, 100%);
+  }
+  .scoreboard.hidden { display: none; }
+  .scoreboard .teams {
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+    gap: 14px;
+  }
+  .scoreboard .name {
+    font-size: 13.5px; font-weight: 600; letter-spacing: 0.02em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .scoreboard .name.a { color: var(--team-a); text-align: right; }
+  .scoreboard .name.b { color: var(--team-b); text-align: left; }
+  /* The possession pip. Present but transparent on the side without the ball,
+     so the names do not shuffle sideways every time it changes hands. */
+  .scoreboard .pip { opacity: 0; font-size: 10px; vertical-align: 2px; }
+  .scoreboard .pip.on { opacity: 1; }
+  .scoreboard .pip.loose { opacity: 0.35; }
+  .scoreboard .goals {
+    font-size: 26px; font-weight: 700; line-height: 1.1; white-space: nowrap;
+  }
+  .scoreboard .goals .a { color: var(--team-a); }
+  .scoreboard .goals .b { color: var(--team-b); }
+  .scoreboard .goals .sep { color: var(--muted); font-weight: 400; margin: 0 7px; }
+  .scoreboard .clock { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  /* Notices — a restart, a foul, a goal — hang below the box rather than sit
+     inside it. They come and go mid-match, and in flow each one grew the
+     scoreboard, which grew the row above the pitch, which shoved the field
+     down and back up again. Out of flow they announce themselves over the top
+     of the pitch and the layout never moves. */
+  .scoreboard .notices {
+    position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 7;
+  }
+  .scoreboard .flash, .scoreboard .restart {
+    display: block; width: fit-content; margin: 4px auto 0; padding: 2px 10px;
+    background: rgba(10, 13, 18, 0.86); border: 1px solid var(--edge);
+    border-radius: 7px; backdrop-filter: blur(3px);
+  }
+  .scoreboard .flash { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; }
+  .scoreboard .restart { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; }
+  .scoreboard .restart .countdown { color: var(--muted); margin-left: 8px; }
+
+  /* Player details are the one movable overlay: the viewer can drag this
+     bubble around the pitch or dock it into the full-width row beneath it. */
+  .inspector {
+    display: flex; flex-direction: column;
+    background: rgba(10, 13, 18, 0.94);
+    border: 1px solid var(--edge);
+    border-radius: 10px; font-variant-numeric: tabular-nums;
+    line-height: 1.6; min-height: 0; overflow: hidden;
+    backdrop-filter: blur(5px); font-size: 13px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .42);
+  }
+  .inspector.hidden { display: none; }
+  .inspector.floating {
+    position: absolute; z-index: 6; width: min(292px, calc(100% - 28px));
+    max-height: calc(100% - 28px);
+  }
+  .inspector.docked {
+    position: relative; width: min(760px, 100%); max-height: 420px;
+    margin: 0 auto; box-shadow: none;
+  }
+  #inspector-dock-slot { grid-area: player; min-width: 0; }
+  #inspector-dock-slot:empty { display: none; }
+  body.inspector-is-docked {
+    height: auto; min-height: 100%; overflow-y: auto;
+    grid-template-rows: auto var(--pitch-row, minmax(560px, 1fr)) auto auto auto auto;
+  }
+  .inspector-head {
+    display: flex; align-items: center; gap: 7px; padding: 8px 8px 7px 12px;
+    border-bottom: 1px solid var(--edge); background: rgba(34, 40, 51, .82);
+    user-select: none;
+  }
+  .floating .inspector-head { cursor: grab; touch-action: none; }
+  .floating.dragging .inspector-head { cursor: grabbing; }
+  .inspector-grip {
+    flex: 1; color: var(--muted); font-size: 11px; font-weight: 650;
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .inspector-tools { display: flex; align-items: center; gap: 5px; }
+  .inspector-tools button {
+    padding: 4px 8px; font-size: 11px; line-height: 1.2;
+  }
+  #inspector-body { flex: 1; min-height: 0; padding: 10px 14px 13px; overflow-y: auto; }
+  .inspector .who { font-size: 15px; font-weight: 600; }
+  .inspector .whose {
+    color: var(--muted); font-size: 12px; margin-bottom: 6px;
+    overflow-wrap: anywhere;
+  }
+  .inspector .k { color: var(--muted); display: inline-block; width: 84px; }
+  .inspector .sub {
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;
+    font-size: 10.5px; margin: 9px 0 2px; border-top: 1px solid var(--edge);
+    padding-top: 7px;
+  }
+  .inspector .on { color: var(--good); }
+  .inspector .off { color: var(--muted); }
+  .inspector .warn { color: var(--bad); }
+  .inspector .close { padding-inline: 7px; }
+
+  .bar {
+    grid-area: controls; position: relative; display: flex; flex-wrap: wrap;
+    align-items: center; gap: 10px; padding: 10px 14px;
+    background: rgba(0,0,0,0.55); border: 1px solid var(--edge);
+    border-radius: 8px; backdrop-filter: blur(3px);
+  }
+  button, select {
+    background: #222833; color: var(--text); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 7px 11px; font: inherit; cursor: pointer;
+  }
+  button:hover { border-color: var(--team-a); }
+  button.on { background: #24703a; border-color: var(--good); }
+  input[type=range] { flex: 1; accent-color: var(--team-a); min-width: 120px; }
+  .bar .status { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  /* The two things the old diagnostics panel said that nothing else does:
+     how long the controllers took, and whether one of them failed. They live
+     with the other run status rather than in a panel of their own, and say
+     nothing at all while there is nothing to report. */
+  .bar .status:empty { display: none; }
+  .bar .status.alert { color: var(--bad); }
+  .toggles { display: flex; gap: 6px; }
+  .toggles button { padding: 6px 9px; font-size: 12px; }
+
+  /* The resize grip. The pitch takes whatever the other panels leave it, which
+     is the right answer until it is not: a docked player panel and a long
+     event log can squeeze it, and on a tall screen there is height going
+     spare. Drag this to set it, double-click to hand it back. */
+  .grip {
+    grid-area: grip; display: flex; align-items: center; justify-content: center;
+    /* Taller than it looks: the pill is 4px, the part you can take hold of is
+       the whole strip, and the negative margin keeps the gap it sits in the
+       same size as every other gap. */
+    height: 16px; margin: -6px 0; cursor: ns-resize; touch-action: none;
+    user-select: none;
+  }
+  .grip::after {
+    content: ""; width: 78px; height: 4px; border-radius: 3px;
+    background: var(--edge); transition: background .12s, width .12s;
+  }
+  .grip:hover::after, .grip:focus-visible::after, .grip.dragging::after {
+    background: var(--muted); width: 104px;
+  }
+  .grip:focus-visible { outline: none; }
+
+  /* The event log. The pitch shows the present and the scoreboard shows the
+     result; this is the record between them, and the only place a turnover or
+     a policy failure is still readable a minute after it went past. It sits
+     under the scrubber because it is a companion to it: both are the match as
+     a timeline rather than as a moment. */
+  .log {
+    grid-area: log; display: flex; flex-direction: column; height: 148px;
+    min-height: 0; background: var(--panel); border: 1px solid var(--edge);
+    border-radius: 8px; overflow: hidden; backdrop-filter: blur(3px);
+  }
+  .log-head {
+    display: flex; align-items: baseline; gap: 8px; flex: none;
+    padding: 6px 12px 5px; border-bottom: 1px solid var(--edge);
+    background: rgba(34, 40, 51, .55); color: var(--muted);
+    font-size: 11px; font-weight: 650; letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .log-head .count {
+    font-weight: 400; letter-spacing: 0; text-transform: none;
+    font-variant-numeric: tabular-nums;
+  }
+  #log-body {
+    flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 5px;
+    font-variant-numeric: tabular-nums; font-size: 12.5px; line-height: 1.55;
+  }
+  .log-row {
+    display: flex; gap: 10px; padding: 1px 12px 1px 9px;
+    border-left: 3px solid transparent;
+  }
+  /* The tick is the column a reader scans down, so it keeps its own width and
+     never reflows as the descriptions beside it change length. */
+  .log-row .at { flex: none; width: 104px; color: var(--muted); }
+  .log-row .what { min-width: 0; overflow-wrap: anywhere; }
+  .log-row.alert .what { color: var(--bad); }
+  .log-empty { color: var(--muted); padding: 3px 12px; }
+
+  #message {
+    grid-area: pitch; position: relative; z-index: 2; display: grid;
+    place-items: center; text-align: center; padding: 30px; color: var(--muted);
+    background: #0e1116; border: 1px solid var(--edge); border-radius: 10px;
+  }
+  #message.hidden { display: none; }
+  #message .err { color: var(--bad); }
+
+  /* Embedded viewers are usually narrower than a standalone replay window.
+     Give the pitch a floor at that size and keep every panel in document flow;
+     the viewer may scroll, but the field is never obscured. */
+  @media (max-width: 1040px) {
+    html, body { height: auto; min-height: 100%; }
+    body {
+      overflow-y: auto; overflow-x: hidden;
+      grid-template-rows: auto var(--pitch-row, minmax(460px, 62vh)) auto auto auto auto;
+    }
+    body.inspector-is-docked {
+      grid-template-rows: auto var(--pitch-row, minmax(460px, 62vh)) auto auto auto auto;
+    }
+    .scoreboard { width: min(620px, 100%); }
+    .inspector.docked { max-height: none; }
+  }
+  @media (max-width: 620px) {
+    body { gap: 8px; padding: 8px; }
+    #stage { min-height: clamp(340px, 78vw, 460px); }
+    .scoreboard { min-width: 0; padding-inline: 10px; }
+    .scoreboard .teams { gap: 7px; }
+    .scoreboard .name { font-size: 12px; }
+    .bar .status { white-space: normal; }
+    .toggles { width: 100%; flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="pitch"></canvas>
+  <div class="inspector floating hidden" id="inspector">
+    <div class="inspector-head" id="inspector-drag">
+      <span class="inspector-grip">Player details · drag to move</span>
+      <span class="inspector-tools">
+        <button id="inspector-dock" title="dock player details below the pitch">Dock below</button>
+        <button class="close" id="inspector-close" title="close (Esc)" aria-label="close player details">&#10005;</button>
+      </span>
+    </div>
+    <div id="inspector-body"></div>
+  </div>
+</div>
+
+<div class="grip" id="grip" tabindex="0" role="separator" aria-orientation="horizontal"
+     aria-label="resize the pitch — drag, or arrow keys; double-click to fit"
+     title="drag to resize the pitch · double-click to fit"></div>
+
+<div class="scoreboard hidden" id="scoreboard"></div>
+<div id="inspector-dock-slot"></div>
+
+<div class="bar">
+  <button id="play">Pause</button>
+  <button id="step">Step</button>
+  <select id="speed">
+    <option value="0.25">0.25×</option>
+    <option value="0.5">0.5×</option>
+    <option value="1">1×</option>
+    <option value="2">2×</option>
+    <option value="4" selected>4×</option>
+    <option value="8">8×</option>
+    <option value="16">16×</option>
+  </select>
+  <input type="range" id="scrub" min="0" max="0" value="0">
+  <span class="status" id="status">loading…</span>
+  <span class="status" id="decide"></span>
+  <span class="status alert" id="alert"></span>
+  <span class="status">click a player to inspect</span>
+  <span class="toggles">
+    <button data-toggle="overlays" class="on">overlays</button>
+    <button data-toggle="debug" class="on">roles</button>
+    <button data-toggle="trajectory" class="on">path</button>
+    <button data-toggle="reasoning" class="on" title="shots and passes weighed, taken and rejected">why</button>
+    <button data-toggle="heat" title="the selected player's positioning heatmap">heatmap</button>
+  </span>
+</div>
+
+<div class="log">
+  <div class="log-head">
+    <span>Match events</span>
+    <span class="count" id="log-count"></span>
+  </div>
+  <div id="log-body"></div>
+</div>
+
+<div id="message">loading…</div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// This viewer is a presentation layer, exactly like the Godot one. It never
+// computes match state: it draws frames the engine produced. Replay frames are
+// decoded server-side by the engine's own reader rather than by a second
+// parser here, so there is one implementation of the format.
+// ---------------------------------------------------------------------------
+
+const COLOURS = {
+  pitch: "#1c5c2e", stripe: "#206634", line: "#ebf0eb",
+  team: ["#3884ff", "#f05448"], ball: "#fafafa", possession: "#ffd640",
+  velocity: "rgba(255,255,255,0.75)", kickRange: "rgba(255,255,255,0.18)",
+  cooldown: "#ff8844", trajectory: "rgba(255,255,255,0.35)",
+  target: "#7ce0a0", pass: "#ffe08a", mark: "#ff9ecd",
+  ballShadow: "rgba(8,30,16,0.55)", selection: "#ffffff",
+  // The intent overlay, drawn only for the inspected player.
+  intent: "#9bd7ff", asked: "#c79bff", kick: "#ffb03a", good: "#7ce0a0",
+  // The reasoning overlay: options weighed, taken and turned down.
+  blocked: "#ff6b6b", passOpen: "#c8b26a", race: "#8ad7ff",
+};
+
+/** Canvas units of upward offset per field unit of ball height. */
+const AERIAL_LIFT = 0.45;
+
+/** How close a click has to land, in pixels, to count as picking a player. */
+const PICK_SLOP_PX = 16;
+
+/** How long a struck kick stays drawn on the pitch, in ticks. */
+const KICK_TRAIL_TICKS = 12;
+
+/**
+ * How long a foul notice stays on the scoreboard, in ticks — two seconds of
+ * match time at 20 Hz. A foul is a single tick, so at 4× it was on screen for
+ * about a fiftieth of a second: long enough to leave a viewer wondering what
+ * the flicker was, not long enough to read.
+ */
+const FOUL_NOTICE_TICKS = 40;
+
+const canvas = document.getElementById("pitch");
+const ctx = canvas.getContext("2d");
+const stageEl = document.getElementById("stage");
+const scoreboardEl = document.getElementById("scoreboard");
+const inspectorEl = document.getElementById("inspector");
+const inspectorBodyEl = document.getElementById("inspector-body");
+const inspectorDragEl = document.getElementById("inspector-drag");
+const inspectorDockEl = document.getElementById("inspector-dock");
+const inspectorDockSlotEl = document.getElementById("inspector-dock-slot");
+const statusEl = document.getElementById("status");
+const decideEl = document.getElementById("decide");
+const alertEl = document.getElementById("alert");
+const logBodyEl = document.getElementById("log-body");
+const logCountEl = document.getElementById("log-count");
+const messageEl = document.getElementById("message");
+const scrubEl = document.getElementById("scrub");
+const playEl = document.getElementById("play");
+
+const params = new URLSearchParams(location.search);
+const show = { overlays: true, debug: true, trajectory: true, reasoning: true, heat: false };
+
+let config = null;          // the match configuration, for pitch dimensions
+let teamIds = ["team_a", "team_b"];
+let frames = [];            // {frame, events, debug, decision_ms}
+// Fractional index into `frames`. Fractional on purpose: the simulation runs at
+// 20 Hz and the display at 60, so snapping to whole ticks shows each position
+// for three refreshes and reads as judder. The whole number selects the frame,
+// the fraction interpolates towards the next one — the same thing the Godot
+// viewer does. Interpolated values are for display only and are never fed back.
+let position = 0;
+let playing = true;
+let speed = parseFloat(params.get("speed") || "4");
+let live = false;
+let liveDone = false;
+// In live mode the newest frame is the interesting one, so playback tracks the
+// incoming edge. Scrubbing or pausing stops following, so a moment can be
+// examined without the stream dragging the view away.
+let following = true;
+let lastPoll = 0;
+let lastTime = performance.now();
+// Whether this match reports per-tick decision timings. Live matches do and
+// replays do not; see updateDiagnostics().
+let hasDecisions = false;
+let lastDecideText = "";
+let lastAlertText = "";
+let lastScoreboardHtml = "";
+let lastInspectorHtml = "";
+let lastScrub = -1;
+// The event log, as {at, html} in the order the ticks produced them, and the
+// last frame index folded into it. See updateEventLog().
+let logRows = [];
+let logCursor = -1;
+// The player the inspector is following, as an index into `frame.players`, or
+// null. Selection is a property of the view and never of the match: it changes
+// nothing that is drawn for anyone else and nothing that is sent anywhere.
+let selected = null;
+let inspectorDocked = false;
+let inspectorPosition = null;
+let inspectorDrag = null;
+// Match totals for the selected player, accumulated forwards. See totalsFor().
+let totals = null;
+// Canvas dimensions are cached rather than read every frame: reading them after
+// a DOM write forces a synchronous reflow.
+const viewport = { w: 0, h: 0 };
+
+document.getElementById("speed").value = String(speed);
+
+// ---------------------------------------------------------------------------
+// Loading
+// ---------------------------------------------------------------------------
+
+function fail(text) {
+  messageEl.classList.remove("hidden");
+  messageEl.innerHTML = `<span class="err">${text}</span>`;
+}
+
+async function loadReplay(name) {
+  const response = await fetch(`api/replay?name=${encodeURIComponent(name)}`);
+  const data = await response.json();
+  if (data.error) { fail(data.error); return; }
+
+  config = data.header.config;
+  teamIds = data.header.team_ids;
+
+  // Group events and debug annotations by tick so a frame can find its own.
+  //
+  // An event is stamped with the tick it was emitted *during*, and the tick
+  // counter advances at the end of that step — so the state an event produced
+  // is the frame numbered one higher. A goal on event tick 284 is the frame
+  // where the score reads 1, which is frame 285. Attaching events by their own
+  // number, as this used to, drew every goal one frame before it was scored
+  // and put a player's kick a frame before the ball left their foot.
+  //
+  // The live path never had this: there the frame and the events of the step
+  // that produced it arrive in one message. This is the replay path agreeing
+  // with it.
+  //
+  // The exception is the final tick, which has no frame after it to be moved
+  // onto, so its events are clamped to the last frame there is. Otherwise they
+  // are read out of the replay and then quietly dropped — which is what became
+  // of every match's terminal event, the one that says full time.
+  const lastTick = data.frames.length
+    ? data.frames[data.frames.length - 1].tick : 0;
+  const eventsByTick = new Map();
+  for (const event of data.events || []) {
+    const at = Math.min(event.tick + 1, lastTick);
+    if (!eventsByTick.has(at)) eventsByTick.set(at, []);
+    eventsByTick.get(at).push(event);
+  }
+  const debugByTick = new Map();
+  for (const entry of data.debug || []) {
+    if (!debugByTick.has(entry.tick)) debugByTick.set(entry.tick, [null, null]);
+    debugByTick.get(entry.tick)[entry.team] = entry.payload;
+  }
+
+  frames = data.frames.map((frame) => ({
+    frame,
+    events: eventsByTick.get(frame.tick) || [],
+    debug: debugByTick.get(frame.tick) || [null, null],
+  }));
+  // These frames are a different match to whatever was loaded before them.
+  resetEventLog();
+
+  messageEl.classList.add("hidden");
+  scrubEl.max = String(Math.max(frames.length - 1, 0));
+  statusEl.textContent = `replay · ${name}`;
+
+  // ?frame=N opens paused on a particular moment, so a specific incident can
+  // be linked to rather than described.
+  const start = params.get("frame");
+  if (start !== null) {
+    // Fractional values are allowed, which makes the interpolation directly
+    // observable: ?frame=300.5 sits halfway between two ticks.
+    position = Math.min(Math.max(Number(start) || 0, 0), frames.length - 1);
+    scrubEl.value = String(position);
+    playing = false;
+    playEl.textContent = "Play";
+  }
+}
+
+// Whether a poll is already out. `since` is read when the request is sent, so
+// two polls in flight at once both ask from the same point and both append the
+// same frames — every tick lands twice. That is not a cosmetic glitch: the
+// scrub bar is twice as long as the match, and because the player panel
+// accumulates its match totals by walking the frames, distance covered, kicks,
+// balls won and time at feet all come out doubled.
+//
+// The first poll is fired at load and the playback loop fires another 200 ms
+// later, so this happens whenever the first reply takes longer than that —
+// which is exactly what attaching to a match already in progress does, since
+// the whole backlog arrives in that first reply.
+let polling = false;
+
+async function pollLive() {
+  if (polling) return;
+  polling = true;
+  try {
+    const response = await fetch(`/api/live?since=${frames.length}`);
+    const data = await response.json();
+    if (data.error && !frames.length) { fail(data.error); return; }
+    if (data.header && !config) {
+      config = data.header.config;
+      teamIds = data.header.team_ids;
+      messageEl.classList.add("hidden");
+    }
+    for (const message of data.frames || []) {
+      frames.push({
+        frame: message.frame,
+        events: message.events || [],
+        debug: message.debug || [null, null],
+        decision_ms: message.decision_ms,
+      });
+    }
+    liveDone = data.finished;
+    scrubEl.max = String(Math.max(frames.length - 1, 0));
+    const following_note = following ? "" : " · paused, press play to rejoin";
+    statusEl.textContent = liveDone
+      ? `live · finished (${frames.length} ticks)`
+      : `live · receiving (${frames.length} ticks)${following_note}`;
+  } finally {
+    polling = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Projection
+// ---------------------------------------------------------------------------
+
+let projection = { scale: 8, ox: 0, oy: 0 };
+
+function resize() {
+  const ratio = window.devicePixelRatio || 1;
+  viewport.w = canvas.clientWidth;
+  viewport.h = canvas.clientHeight;
+  canvas.width = Math.floor(viewport.w * ratio);
+  canvas.height = Math.floor(viewport.h * ratio);
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+}
+
+function computeProjection() {
+  const w = viewport.w, h = viewport.h;
+  const fieldW = config?.field?.width ?? 100;
+  const fieldH = config?.field?.height ?? 60;
+  // The scoreboard and playback controls live outside the canvas, so the pitch
+  // only needs a small breathing margin rather than space for overlaid panels.
+  const usableW = Math.max(w - 44, 1);
+  const usableH = Math.max(h - 44, 1);
+  projection.scale = Math.min(usableW / fieldW, usableH / fieldH);
+  projection.ox = w / 2;
+  projection.oy = h / 2;
+}
+
+// Field units to pixels. The y axis is flipped so +y is up, matching Godot.
+const px = (p) => projection.ox + p.x * projection.scale;
+const py = (p) => projection.oy - p.y * projection.scale;
+const len = (v) => v * projection.scale;
+
+/** The inverse, for turning a click on the canvas back into a place on the pitch. */
+const fieldPoint = (clientX, clientY) => {
+  const box = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - box.left - projection.ox) / projection.scale,
+    y: (projection.oy - (clientY - box.top)) / projection.scale,
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+
+function drawField() {
+  const hw = (config?.field?.width ?? 100) / 2;
+  const hh = (config?.field?.height ?? 60) / 2;
+  const goalHalf = (config?.field?.goal_width ?? 14) / 2;
+
+  const left = px({ x: -hw }), right = px({ x: hw });
+  const top = py({ y: hh }), bottom = py({ y: -hh });
+
+  ctx.fillStyle = COLOURS.pitch;
+  ctx.fillRect(left, top, right - left, bottom - top);
+
+  ctx.fillStyle = COLOURS.stripe;
+  for (let i = 0; i < 10; i += 2) {
+    const x0 = px({ x: -hw + i * (hw * 2 / 10) });
+    const x1 = px({ x: -hw + (i + 1) * (hw * 2 / 10) });
+    ctx.fillRect(x0, top, x1 - x0, bottom - top);
+  }
+
+  ctx.strokeStyle = COLOURS.line;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(left, top, right - left, bottom - top);
+  ctx.beginPath();
+  ctx.moveTo(px({ x: 0 }), top);
+  ctx.lineTo(px({ x: 0 }), bottom);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(px({ x: 0 }), py({ y: 0 }), len(hh * 0.3), 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(px({ x: 0 }), py({ y: 0 }), 3, 0, Math.PI * 2);
+  ctx.fillStyle = COLOURS.line;
+  ctx.fill();
+
+  // Goal mouths in each side's colour.
+  for (let team = 0; team < 2; team++) {
+    const goalX = team === 0 ? -hw : hw;
+    const depth = team === 0 ? -3 : 3;
+    ctx.strokeStyle = COLOURS.team[team];
+    ctx.lineWidth = 3;
+    const a = { x: goalX, y: goalHalf }, b = { x: goalX + depth, y: -goalHalf };
+    ctx.strokeRect(px(a), py(a), px(b) - px(a), py(b) - py(a));
+  }
+}
+
+function arrow(from, to, colour, width = 1.5) {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 1) return;
+  ctx.strokeStyle = colour;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x, to.y);
+  ctx.stroke();
+  const ux = dx / length, uy = dy / length;
+  const head = 4 * width;
+  for (const angle of [2.6, -2.6]) {
+    const rx = ux * Math.cos(angle) - uy * Math.sin(angle);
+    const ry = ux * Math.sin(angle) + uy * Math.cos(angle);
+    ctx.beginPath();
+    ctx.moveTo(to.x, to.y);
+    ctx.lineTo(to.x + rx * head, to.y + ry * head);
+    ctx.stroke();
+  }
+}
+
+/**
+ * Predicted ball path, clipped at the touchline. Mirrors the engine's
+ * integration stage, so under an aerial profile the drawn path arcs and
+ * bounces the way the ball actually will.
+ */
+function drawTrajectory(frame) {
+  const v = frame.ball_velocity;
+  if (!show.trajectory || Math.hypot(v.x, v.y) < 0.5) return;
+  const rolling = config?.ball?.friction_per_tick ?? 0.985;
+  const air = config?.ball?.air_friction_per_tick ?? 0.998;
+  const bounce = config?.ball?.bounce_restitution ?? 0.55;
+  const bounceDrag = config?.ball?.bounce_friction ?? 0.8;
+  const gravity = config?.ball?.gravity ?? 9.81;
+  const aerial = !!config?.ball?.aerial;
+  const dt = 1 / (config?.match?.simulation_hz ?? 20);
+  const hw = (config?.field?.width ?? 100) / 2;
+  const hh = (config?.field?.height ?? 60) / 2;
+
+  let p = { x: frame.ball_position.x, y: frame.ball_position.y };
+  let vel = { x: v.x, y: v.y };
+  let height = frame.ball_height ?? 0;
+  let climb = frame.ball_vertical_velocity ?? 0;
+  ctx.strokeStyle = COLOURS.trajectory;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(px(p), py(p) - len(height * AERIAL_LIFT));
+  for (let i = 0; i < 40; i++) {
+    p = { x: p.x + vel.x * dt, y: p.y + vel.y * dt };
+    let airborne = false;
+    if (aerial) {
+      const wasAirborne = height > 0;
+      climb -= gravity * dt;
+      height += climb * dt;
+      if (height <= 0) {
+        // Matches the engine's settling threshold, so the drawn path stops
+        // bouncing where the real one does.
+        if (-climb > 0.5) {
+          height = -height * bounce;
+          climb = -climb * bounce;
+          vel = { x: vel.x * bounceDrag, y: vel.y * bounceDrag };
+        } else {
+          height = 0;
+          climb = 0;
+        }
+      }
+      airborne = wasAirborne || height > 0;
+    }
+    const drag = airborne ? air : rolling;
+    vel = { x: vel.x * drag, y: vel.y * drag };
+    if (Math.abs(p.x) > hw || Math.abs(p.y) > hh) break;
+    ctx.lineTo(px(p), py(p) - len(height * AERIAL_LIFT));
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawPlayers(entry, frame) {
+  const perTeam = config?.match?.players_per_team ?? 5;
+  const radius = len(config?.player?.radius ?? 1);
+  const kickRange = len(config?.player?.kick_range ?? 2.2);
+  const cooldownMax = Math.max(config?.player?.kick_cooldown_ticks ?? 5, 1);
+
+  frame.players.forEach((player, index) => {
+    const team = Math.floor(index / perTeam);
+    const centre = { x: px(player.position), y: py(player.position) };
+
+    if (show.overlays) {
+      ctx.strokeStyle = COLOURS.kickRange;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(centre.x, centre.y, kickRange, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = COLOURS.team[team];
+    ctx.beginPath();
+    ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    if (show.overlays) {
+      ctx.strokeStyle = COLOURS.line;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // Facing tick, from the body edge so the colour stays readable.
+    const facing = player.facing;
+    const magnitude = Math.hypot(facing.x, facing.y);
+    if (magnitude > 0.01) {
+      const r = config?.player?.radius ?? 1;
+      const from = { x: player.position.x + facing.x / magnitude * r * 0.7,
+                     y: player.position.y + facing.y / magnitude * r * 0.7 };
+      const to = { x: player.position.x + facing.x / magnitude * r * 1.9,
+                   y: player.position.y + facing.y / magnitude * r * 1.9 };
+      ctx.strokeStyle = COLOURS.line;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px(from), py(from));
+      ctx.lineTo(px(to), py(to));
+      ctx.stroke();
+    }
+
+    if (show.overlays) {
+      const vel = player.velocity;
+      if (Math.hypot(vel.x, vel.y) > 0.1) {
+        const tip = { x: player.position.x + vel.x * 0.25, y: player.position.y + vel.y * 0.25 };
+        arrow(centre, { x: px(tip), y: py(tip) }, COLOURS.velocity);
+      }
+      if (player.kick_cooldown_ticks > 0) {
+        const fraction = Math.min(player.kick_cooldown_ticks / cooldownMax, 1);
+        ctx.strokeStyle = COLOURS.cooldown;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(centre.x, centre.y, radius * 1.35,
+                -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fraction);
+        ctx.stroke();
+      }
+    }
+
+    if (frame.controlled && frame.possession_player === index) {
+      ctx.strokeStyle = COLOURS.possession;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(centre.x, centre.y, radius * 1.7, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // The inspected player, marked so the panel and the pitch cannot disagree
+    // about who is being read. Dashed, and wider than the possession ring, so
+    // a player who is both still shows both.
+    if (index === selected) {
+      ctx.strokeStyle = COLOURS.selection;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.arc(centre.x, centre.y, Math.max(radius * 2.2, 12), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    ctx.fillStyle = COLOURS.line;
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(String(index), centre.x, centre.y + 4);
+  });
+}
+
+/**
+ * The ball, lifted up the canvas when it is in the air with its shadow left
+ * on the turf beneath it.
+ *
+ * A top-down view has no other way to show height: without the shadow a chip
+ * and a pass look identical, and a ball sailing over a defender looks like a
+ * defender missing it. AERIAL_LIFT is well under 1 so a ball twelve units up
+ * does not draw so far from its shadow that it reads as a second ball.
+ */
+function drawBall(frame) {
+  const centre = { x: px(frame.ball_position), y: py(frame.ball_position) };
+  const radius = Math.max(len(config?.ball?.radius ?? 0.45), 3);
+  const height = frame.ball_height ?? 0;
+
+  if (config?.ball?.aerial && height > 0) {
+    ctx.fillStyle = COLOURS.ballShadow;
+    ctx.beginPath();
+    ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    centre.y -= len(height * AERIAL_LIFT);
+    // Grows with height, the way a thing coming towards a camera does.
+    ctx.fillStyle = COLOURS.ball;
+    ctx.beginPath();
+    ctx.arc(centre.x, centre.y, radius * Math.min(1 + height * 0.05, 1.6), 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = COLOURS.ball;
+    ctx.beginPath();
+    ctx.arc(centre.x, centre.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const v = frame.ball_velocity;
+  if (show.overlays && Math.hypot(v.x, v.y) > 0.2) {
+    const tip = { x: frame.ball_position.x + v.x * 0.25, y: frame.ball_position.y + v.y * 0.25 };
+    arrow(centre, { x: px(tip), y: py(tip) }, COLOURS.ball);
+  }
+}
+
+/**
+ * What the inspected player is going for, drawn on the pitch.
+ *
+ * The panel says it in words; this puts it where the play is, so the two can be
+ * read together without looking away. Only ever the selected player: drawn for
+ * everyone at once this is noise, which is what the roles overlay already is.
+ *
+ * Every line here is either something the engine published or something the
+ * controller annotated. Nothing is inferred about a decision that was not made.
+ */
+function drawIntent(entry, frame, index) {
+  if (selected === null) return;
+  const player = frame.players[selected];
+  if (!player) return;
+  const radius = config?.player?.radius ?? 1;
+  const centre = { x: px(player.position), y: py(player.position) };
+  const notes = annotationsFor(entry, selected);
+  const run = totalsFor(selected, index);
+
+  ctx.save();
+
+  // What they were told to do, and what came of it, as two arrows from the
+  // same body. When they agree the second sits under the first and this reads
+  // as one arrow; when they disagree — pinned, blocked, out-accelerated — the
+  // gap between them is the answer.
+  const asked = player.action?.movement;
+  if (asked && Math.hypot(asked.x, asked.y) > 0.01) {
+    // Scaled to a fixed reach by throttle, not to a speed: this is a request,
+    // and a request has no units on the pitch.
+    const tip = { x: player.position.x + asked.x * 6, y: player.position.y + asked.y * 6 };
+    arrow(centre, { x: px(tip), y: py(tip) }, COLOURS.asked, 3);
+    caption(tip, 10, "asked", COLOURS.asked);
+  }
+
+  // Where they will be if they carry on: half a second of travel, which is far
+  // enough to read as a direction and short enough to stay a claim about now.
+  const velocity = player.velocity;
+  const speed = Math.hypot(velocity.x, velocity.y);
+  if (speed > 0.3) {
+    const tip = { x: player.position.x + velocity.x * 0.5,
+                  y: player.position.y + velocity.y * 0.5 };
+    arrow(centre, { x: px(tip), y: py(tip) }, COLOURS.intent, 2.5);
+  }
+
+  // The ball, once it is close enough to play: this is "can kick" drawn where
+  // the eye already is rather than as a word in a panel.
+  const toBall = Math.hypot(frame.ball_position.x - player.position.x,
+                            frame.ball_position.y - player.position.y);
+  if (toBall <= (config?.player?.kick_range ?? 2.2)) {
+    ctx.strokeStyle = player.kick_cooldown_ticks > 0 ? COLOURS.cooldown : COLOURS.good;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(centre.x, centre.y);
+    ctx.lineTo(px(frame.ball_position), py(frame.ball_position));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Where their controller said it was sending them.
+  if (notes.target) {
+    ctx.strokeStyle = COLOURS.target;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(centre.x, centre.y);
+    ctx.lineTo(px(notes.target), py(notes.target));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(px(notes.target), py(notes.target), 7, 0, Math.PI * 2);
+    ctx.stroke();
+    caption(notes.target, 14,
+            notes.role ? `${escapeHtml(notes.role)} →` : "target", COLOURS.target);
+  }
+
+  // The kick they just struck, held for a moment. A kick lasts one tick, so
+  // without this the only evidence at speed is the ball suddenly leaving.
+  const kick = run.lastKick;
+  if (kick && frame.tick - kick.tick <= KICK_TRAIL_TICKS) {
+    const direction = toVec(kick.direction);
+    if (direction) {
+      const magnitude = Math.hypot(direction.x, direction.y) || 1;
+      const reach = radius * 2 + 4 + (kick.power || 0) * 10;
+      const from = { x: player.position.x + direction.x / magnitude * radius * 1.2,
+                     y: player.position.y + direction.y / magnitude * radius * 1.2 };
+      const to = { x: player.position.x + direction.x / magnitude * reach,
+                   y: player.position.y + direction.y / magnitude * reach };
+      ctx.globalAlpha = 1 - (frame.tick - kick.tick) / (KICK_TRAIL_TICKS + 1);
+      arrow({ x: px(from), y: py(from) }, { x: px(to), y: py(to) }, COLOURS.kick, 3);
+      caption(to, 12, `kick ${fixed(kick.power, 2)}`, COLOURS.kick);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  ctx.restore();
+}
+
+/** A small caption beside a point on the pitch. */
+function caption(at, offset, text, colour) {
+  ctx.fillStyle = colour;
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText(text, px(at) + offset, py(at) - 8);
+}
+
+const toVec = (value) => {
+  if (!value) return null;
+  if (Array.isArray(value)) return { x: value[0], y: value[1] };
+  if (typeof value === "object" && "x" in value) return { x: value.x, y: value.y };
+  return null;
+};
+
+/**
+ * A team's annotations, decoded and checked once per frame.
+ *
+ * The payload arrives already in this viewer's frame: a controller writes in
+ * its own canonical frame — always attacking +x, its own players always ids
+ * 0..n-1 — and the engine converts both, at `perspective::debug_to_absolute`,
+ * where the payload is consumed. So there is no rotation and no id arithmetic
+ * to do here, and doing any would undo the engine's.
+ *
+ * Cached on the entry because three overlays and the panel read the same
+ * payload, and parsing a heatmap sixty times a second is not free.
+ *
+ * Untrusted text throughout. Anything malformed is dropped rather than repaired.
+ */
+function payloadsFor(entry) {
+  if (!entry) return [null, null];
+  if (!entry._payloads) {
+    entry._payloads = [0, 1].map((team) => {
+      const raw = entry.debug?.[team];
+      if (!raw) return null;
+      let payload;
+      try { payload = JSON.parse(raw); } catch { return null; }
+      if (!payload || typeof payload !== "object") return null;
+      return decodePayload(payload);
+    });
+  }
+  return entry._payloads;
+}
+
+function decodePayload(payload) {
+  const out = { raw: payload };
+  const byId = (source, convert) => {
+    if (!source || typeof source !== "object") return {};
+    const mapped = {};
+    for (const [key, value] of Object.entries(source)) {
+      const id = Number(key);
+      const converted = Number.isInteger(id) ? convert(value) : null;
+      if (converted !== null) mapped[id] = converted;
+    }
+    return mapped;
+  };
+  const playerOf = (value) => (Number.isInteger(value) ? value : null);
+
+  out.roles = byId(payload.roles, (value) => String(value));
+  out.targets = byId(payload.targets, (value) => toVec(value));
+  out.race = byId(payload.race, (value) => (value && typeof value === "object" ? {
+    eta: Number(value.eta),
+    at: toVec(value.at),
+    go: !!value.go,
+  } : null));
+
+  out.shots = (Array.isArray(payload.shots) ? payload.shots : []).map((report) => ({
+    player: playerOf(report?.player),
+    from: toVec(report?.from),
+    chosen: Number.isInteger(report?.chosen) ? report.chosen : null,
+    rays: (Array.isArray(report?.rays) ? report.rays : []).map((ray) => ({
+      to: toVec(ray?.to),
+      room: Number(ray?.room), need: Number(ray?.need),
+      range: Number(ray?.range), score: Number(ray?.score), open: !!ray?.open,
+    })).filter((ray) => ray.to),
+  })).filter((report) => report.player !== null && report.from);
+
+  out.passOptions = (Array.isArray(payload.pass_options) ? payload.pass_options : []).map((report) => ({
+    player: playerOf(report?.player),
+    from: toVec(report?.from),
+    pressure: Number(report?.pressure),
+    chosen: Number.isInteger(report?.chosen) ? report.chosen : null,
+    options: (Array.isArray(report?.options) ? report.options : []).map((option) => ({
+      mate: playerOf(option?.mate),
+      to: toVec(option?.to),
+      room: Number(option?.room), need: Number(option?.need),
+      gain: Number(option?.gain), space: Number(option?.space),
+      range: Number(option?.range), score: Number(option?.score),
+      why: String(option?.why ?? ""),
+    })).filter((option) => option.to),
+  })).filter((report) => report.player !== null && report.from);
+
+  const heat = payload.heat;
+  if (heat && typeof heat === "object" && Number.isInteger(heat.cols) && Number.isInteger(heat.rows)) {
+    const origin = toVec(heat.origin), step = toVec(heat.step);
+    if (origin && step) {
+      out.heat = {
+        cols: heat.cols, rows: heat.rows, origin, step,
+        players: byId(heat.players, (value) => (value && Array.isArray(value.cells) ? {
+          role: String(value.role ?? ""),
+          best: Number.isInteger(value.best) ? value.best : -1,
+          lo: Number(value.lo), hi: Number(value.hi),
+          cells: value.cells,
+        } : null)),
+      };
+    }
+  }
+  out.text = typeof payload.text === "string" ? payload.text : undefined;
+  return out;
+}
+
+/** Student annotations. Untrusted text: malformed payloads are ignored. */
+function drawDebug(entry, frame) {
+  if (!show.debug) return;
+  for (let team = 0; team < 2; team++) {
+    const decoded = payloadsFor(entry)[team];
+    if (!decoded) continue;
+    const payload = decoded.raw;
+
+    ctx.setLineDash([5, 4]);
+    ctx.lineWidth = 1.5;
+    for (const [key, value] of Object.entries(decoded.targets)) {
+      const index = Number(key);
+      if (!frame.players[index]) continue;
+      ctx.strokeStyle = COLOURS.target;
+      ctx.beginPath();
+      ctx.moveTo(px(frame.players[index].position), py(frame.players[index].position));
+      ctx.lineTo(px(value), py(value));
+      ctx.stroke();
+      ctx.fillStyle = COLOURS.target;
+      ctx.beginPath();
+      ctx.arc(px(value), py(value), 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    for (const [key, colour] of [["passes", COLOURS.pass], ["marks", COLOURS.mark]]) {
+      const lines = payload[key];
+      if (!Array.isArray(lines)) continue;
+      ctx.strokeStyle = colour;
+      for (const line of lines) {
+        const from = toVec(line?.from), to = toVec(line?.to);
+        if (!from || !to) continue;
+        ctx.beginPath();
+        ctx.moveTo(px(from), py(from));
+        ctx.lineTo(px(to), py(to));
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = COLOURS.team[team];
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    for (const [key, label] of Object.entries(decoded.roles)) {
+      const player = frame.players[Number(key)];
+      if (!player) continue;
+      ctx.fillText(label, px(player.position) + 10, py(player.position) - 9);
+    }
+  }
+}
+
+/**
+ * The heatmap one player scored this tick, for the player being inspected.
+ *
+ * Only ever one player's. The grid is per-role and per-player — three of them
+ * drawn at once would be three different maps of the same grass, which is not a
+ * picture of anything. Shaded by rank within that player's own range rather
+ * than by absolute score, because the scores are not comparable between roles:
+ * a covering defender scores every cell negative and would otherwise render as
+ * a uniformly black pitch.
+ */
+function drawHeatmap(entry, frame) {
+  if (!show.heat || selected === null) return;
+  const perTeam = config?.match?.players_per_team ?? 5;
+  const decoded = payloadsFor(entry)[Math.floor(selected / perTeam)];
+  const heat = decoded?.heat;
+  const mine = heat?.players?.[selected];
+  if (!mine) return;
+
+  const width = Math.abs(len(heat.step.x)), height = Math.abs(len(heat.step.y));
+  ctx.save();
+  for (let index = 0; index < mine.cells.length; index++) {
+    const value = mine.cells[index] / 255;
+    const at = {
+      x: heat.origin.x + (index % heat.cols) * heat.step.x,
+      y: heat.origin.y + Math.floor(index / heat.cols) * heat.step.y,
+    };
+    // Squared, so the shading separates the handful of cells actually in
+    // contention instead of washing the whole pitch pale green.
+    ctx.fillStyle = `rgba(124, 224, 160, ${(value * value * 0.5).toFixed(3)})`;
+    ctx.fillRect(px(at) - width / 2, py(at) - height / 2, width, height);
+    if (index === mine.best) {
+      ctx.strokeStyle = COLOURS.target;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(px(at) - width / 2, py(at) - height / 2, width, height);
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * The rays a decision was actually made from: sights of goal, and passes.
+ *
+ * This is the overlay that answers "why did it do that", and it only ever draws
+ * options that were really weighed — a rejected ray is drawn because it was
+ * scored and turned down, not to illustrate what might have happened.
+ *
+ * Restricted to the inspected player when there is one, because a fan of five
+ * shots and four passes for every player on the pitch is a spider's web.
+ */
+function drawReasoning(entry, frame) {
+  if (!show.reasoning) return;
+  const perTeam = config?.match?.players_per_team ?? 5;
+  const only = selected === null ? null : selected;
+  ctx.save();
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "left";
+
+  for (let team = 0; team < 2; team++) {
+    if (only !== null && Math.floor(only / perTeam) !== team) continue;
+    const decoded = payloadsFor(entry)[team];
+    if (!decoded) continue;
+
+    for (const report of decoded.shots) {
+      if (only !== null && report.player !== only) continue;
+      report.rays.forEach((ray, index) => {
+        const taken = index === report.chosen;
+        ctx.strokeStyle = ray.open ? COLOURS.good : COLOURS.blocked;
+        ctx.lineWidth = taken ? 3 : 1.2;
+        ctx.setLineDash(ray.open ? [] : [4, 4]);
+        ctx.globalAlpha = taken ? 1 : 0.55;
+        ctx.beginPath();
+        ctx.moveTo(px(report.from), py(report.from));
+        ctx.lineTo(px(ray.to), py(ray.to));
+        ctx.stroke();
+        if (taken) {
+          ctx.fillStyle = COLOURS.good;
+          ctx.fillText(`shot · ${fixed(ray.room)}u room`, px(ray.to) + 6, py(ray.to) - 6);
+        }
+      });
+    }
+
+    for (const report of decoded.passOptions) {
+      if (only !== null && report.player !== only) continue;
+      report.options.forEach((option, index) => {
+        const taken = index === report.chosen;
+        const open = option.why === "open";
+        ctx.strokeStyle = taken ? COLOURS.pass : open ? COLOURS.passOpen : COLOURS.blocked;
+        ctx.lineWidth = taken ? 3 : 1.2;
+        ctx.setLineDash(open ? [] : [3, 5]);
+        ctx.globalAlpha = taken ? 1 : 0.5;
+        ctx.beginPath();
+        ctx.moveTo(px(report.from), py(report.from));
+        ctx.lineTo(px(option.to), py(option.to));
+        ctx.stroke();
+        // The lead point is a claim about where the ball is going; mark it so
+        // it can be compared with where the receiver actually was.
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.beginPath();
+        ctx.arc(px(option.to), py(option.to), taken ? 4 : 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        if (!taken && option.why !== "open" && option.why !== "range") {
+          ctx.fillText(option.why, px(option.to) + 5, py(option.to) + 11);
+        }
+        if (taken) ctx.fillText(`pass · ${fixed(option.gain)}u gain`, px(option.to) + 6, py(option.to) - 6);
+      });
+    }
+
+    // Where the race says each player could meet the ball. Only the winner's
+    // is drawn: everyone else's is a road not taken, and drawing all four turns
+    // the middle of the pitch into a starburst.
+    for (const [key, value] of Object.entries(decoded.race || {})) {
+      if (!value.go || !value.at) continue;
+      const index = Number(key);
+      if (only !== null && index !== only) continue;
+      const player = frame.players[index];
+      if (!player) continue;
+      ctx.setLineDash([2, 3]);
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = COLOURS.race;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px(player.position), py(player.position));
+      ctx.lineTo(px(value.at), py(value.at));
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(px(value.at), py(value.at), 5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = COLOURS.race;
+      ctx.fillText(`meets in ${Math.round(value.eta)}t`, px(value.at) + 7, py(value.at) + 4);
+    }
+  }
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+/** Ticks as a clock, which is how long a match actually feels. */
+function clockOf(ticks) {
+  const seconds = Math.max(ticks, 0) / (config?.match?.simulation_hz ?? 20);
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+}
+
+/**
+ * Events of one kind emitted on the frame at `index` or in the `hold` frames
+ * before it, newest first.
+ *
+ * Reading back through the frames rather than running a wall-clock timer keeps
+ * a held notice honest: it says what the ticks on screen actually contain,
+ * whichever way playback arrived at them. Scrub away from a foul and it goes;
+ * scrub back onto it and it returns; pause on it and it stays. A timer would
+ * have shown a foul from a moment the viewer had already scrubbed past.
+ */
+function recentEvents(index, kind, hold) {
+  const found = [];
+  for (let i = index; i >= Math.max(index - hold, 0); i--) {
+    for (const event of frames[i]?.events || []) {
+      if (event.kind === kind) found.push(event);
+    }
+  }
+  return found;
+}
+
+/** Long enough to read, short enough to leave the score the biggest thing. */
+const shortName = (name) =>
+  String(name).length > 24 ? String(name).slice(0, 23) + "…" : String(name);
+
+function titleWord(word) {
+  if (!word) return "";
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+function publicTeamName(name) {
+  const raw = String(name || "").trim();
+  const parts = raw.split("-").filter(Boolean);
+  if (parts.length >= 3 && /^\d+$/.test(parts[0])) {
+    return parts.slice(1).map(titleWord).join(" ");
+  }
+  return raw;
+}
+
+const shortTeamName = (name) => shortName(publicTeamName(name));
+
+/**
+ * The scoreboard: score, both sides, the clock, and who has the ball.
+ *
+ * Centred at the top on the field's centre line because it is the one thing a
+ * viewer glances at, and alone up there: mixing the result into a column of
+ * diagnostics once made it no more prominent than the frame counter.
+ */
+function updateScoreboard(entry, index) {
+  const frame = entry.frame;
+  const maxTicks = config?.match?.max_ticks ?? 0;
+  const holder = frame.possession_team;
+  const pip = (team) => {
+    if (holder !== team) return `<span class="pip">●</span>`;
+    return `<span class="pip on${frame.controlled ? "" : " loose"}">●</span>`;
+  };
+  const rows = [
+    `<div class="teams">` +
+      `<span class="name a">${escapeHtml(shortTeamName(teamIds[0]))} ${pip(0)}</span>` +
+      `<span class="goals"><span class="a">${frame.score[0]}</span>` +
+      `<span class="sep">–</span><span class="b">${frame.score[1]}</span></span>` +
+      `<span class="name b">${pip(1)} ${escapeHtml(shortTeamName(teamIds[1]))}</span>` +
+      `</div>`,
+    `<div class="clock">${clockOf(frame.tick)} / ${clockOf(maxTicks)}` +
+      ` · tick ${frame.tick} / ${maxTicks}</div>`,
+  ];
+  // Everything below goes into the notices layer, which is positioned out of
+  // the scoreboard's flow: these lines appear and vanish mid-match and must
+  // not change the height of anything above the pitch.
+  const notices = [];
+  // The restart, while one is outstanding. This is the one piece of match
+  // state that cannot be read off the pitch: a side standing off the ball
+  // looks identical to a side ignoring it, and this says which it is.
+  const kickoff = frame.kickoff;
+  if (kickoff !== null && kickoff !== undefined) {
+    const hz = config?.match?.simulation_hz ?? 20;
+    const remaining = frame.kickoff_ticks_remaining ?? 0;
+    // A frame carrying no countdown is labelled without one, rather than
+    // shown a clock reading zero that is not.
+    const countdown = remaining > 0
+      ? `<span class="countdown">${(remaining / hz).toFixed(1)}s</span>` : "";
+    notices.push(`<div class="restart" style="color:${COLOURS.team[kickoff]}">` +
+      `● KICKOFF · ${escapeHtml(shortTeamName(teamIds[kickoff])).toUpperCase()}` +
+      `${countdown}</div>`);
+  }
+  // A foul is one tick long too, and its whole visible effect is a body
+  // appearing on a touchline. Said out loud, or it reads as a glitch — and
+  // held for FOUL_NOTICE_TICKS afterwards, so it is readable at speed. One
+  // line per side however many players encroached: the same sentence three
+  // times over says nothing the first one did not.
+  const fouled = new Set();
+  for (const foul of recentEvents(index, "foul", FOUL_NOTICE_TICKS)) {
+    if (fouled.has(foul.team)) continue;
+    fouled.add(foul.team);
+    notices.push(`<div class="restart" style="color:${COLOURS.team[foul.team]}">` +
+      `FOUL · ${escapeHtml(shortTeamName(teamIds[foul.team])).toUpperCase()}` +
+      `<span class="countdown">encroached on the kickoff</span></div>`);
+  }
+  // A goal is one tick long, so it is announced here rather than only in the
+  // score - at 4x the number changing is the whole of the evidence otherwise.
+  for (const goal of entry.events.filter((event) => event.kind === "goal")) {
+    notices.push(`<div class="flash" style="color:${COLOURS.team[goal.team]}">` +
+      `GOAL — ${escapeHtml(shortTeamName(teamIds[goal.team]))}` +
+      `${goal.own_goal ? " (own goal)" : ""}</div>`);
+  }
+  if (notices.length) rows.push(`<div class="notices">${notices.join("")}</div>`);
+  const html = rows.join("");
+  if (html !== lastScoreboardHtml) {
+    scoreboardEl.innerHTML = html;
+    scoreboardEl.classList.remove("hidden");
+    lastScoreboardHtml = html;
+  }
+}
+
+/**
+ * The two run-level facts nothing else on screen carries: how long the
+ * controllers took to decide, and whether either of them failed this tick.
+ *
+ * There used to be a panel beside the scoreboard listing phase, possession,
+ * speed and frame alongside these. Every one of those four is already on the
+ * screen - possession on the scoreboard's pips, phase in the player panel and
+ * the role overlay, speed in the selector, frame in the scrubber and the
+ * scoreboard's tick count - so the panel said little and, by growing and
+ * shrinking as lines came and went, moved the pitch while it said it. What is
+ * left joins the run status in the control bar.
+ */
+function updateDiagnostics(entry) {
+  // Once a frame has carried timings the reading stays, with a placeholder on
+  // the frames that do not, so the bar does not flicker between two widths.
+  if (entry.decision_ms) hasDecisions = true;
+  const decide = hasDecisions
+    ? `decide ${entry.decision_ms
+        ? `${entry.decision_ms[0].toFixed(2)} ms / ${entry.decision_ms[1].toFixed(2)} ms`
+        : "—"}`
+    : "";
+  if (decide !== lastDecideText) {
+    decideEl.textContent = decide;
+    lastDecideText = decide;
+  }
+
+  // Goals are announced on the scoreboard, not here.
+  const failures = entry.events.filter(
+    (e) => e.kind === "policy_error" || e.kind === "policy_timeout");
+  const alert = failures.length
+    ? `!! ${failures.length} policy failure(s)` : "";
+  if (alert !== lastAlertText) {
+    alertEl.textContent = alert;
+    lastAlertText = alert;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The event log
+//
+// A running record of what happened and when, in the order it happened, tinted
+// by the side it happened to. It is built from the frames rather than kept as a
+// separate stream, so it is exactly as far along as the playback is: scrub back
+// and the lines the viewer has not reached again are cut, scrub forward and
+// they return in the same order. Nothing here is state the match holds - it is
+// the same events the pitch already drew, written down.
+// ---------------------------------------------------------------------------
+
+/**
+ * Event kinds worth a line. Kicks, rejected kicks and collisions are left out
+ * on purpose: they happen several times a second, and a log that scrolls past
+ * faster than it can be read records nothing.
+ */
+const LOGGED_KINDS = new Set([
+  "goal", "foul", "turnover", "policy_error", "policy_timeout", "terminal",
+]);
+
+/** How a terminal reason reads out loud. It is a string or a tagged object. */
+function terminalReason(reason) {
+  if (typeof reason === "string") return reason.replace(/_/g, " ");
+  if (reason && reason.forfeit !== undefined) {
+    return `forfeit · ${escapeHtml(shortTeamName(teamIds[reason.forfeit.team]))}`;
+  }
+  return "over";
+}
+
+/**
+ * One line of the log for an event, or null for the kinds that do not get one.
+ * `team` tints the line and may be null for events that belong to neither side.
+ */
+function describeEvent(event) {
+  const side = (team) => escapeHtml(shortTeamName(teamIds[team]));
+  switch (event.kind) {
+    case "goal":
+      return { team: event.team, text: `<b>GOAL</b> · ${side(event.team)}` +
+        (event.scorer === null || event.scorer === undefined
+          ? "" : ` · player ${event.scorer}`) +
+        (event.own_goal ? " (own goal)" : "") };
+    case "foul":
+      return { team: event.team, text: `foul · ${side(event.team)} player ` +
+        `${event.player} encroached, sent to the touchline` };
+    case "turnover":
+      return { team: event.to_team, text: `turnover · ${side(event.to_team)} ` +
+        `player ${event.player} ` +
+        (event.from_team === null || event.from_team === undefined
+          ? "collected a loose ball" : `took it off ${side(event.from_team)}`) };
+    case "policy_timeout":
+      return { team: event.team, alert: true,
+        text: `policy timeout · ${side(event.team)} took ` +
+          `${(event.elapsed_ms ?? 0).toFixed(1)} ms` };
+    case "policy_error":
+      return { team: event.team, alert: true,
+        text: `policy error · ${side(event.team)} · ${escapeHtml(event.message ?? "")}` };
+    case "terminal":
+      return { team: null, text: `full time · ${terminalReason(event.reason)}` };
+    default:
+      return null;
+  }
+}
+
+/** The lines the frame at `index` contributes, in the order they read. */
+function logLinesFor(index) {
+  const entry = frames[index];
+  const lines = [];
+  for (const event of entry.events) {
+    if (!LOGGED_KINDS.has(event.kind)) continue;
+    const line = describeEvent(event);
+    if (line) lines.push(line);
+  }
+  // A kickoff is frame state rather than an event, but it is the reason play
+  // stopped: without it the log reads as goals with nothing in between. It is
+  // logged on the frame the restart is first outstanding, and after that
+  // frame's events, because the goal awarded on the same frame is what caused
+  // the restart and reads first.
+  const kickoff = entry.frame.kickoff ?? null;
+  const before = index > 0 ? (frames[index - 1].frame.kickoff ?? null) : null;
+  if (kickoff !== null && kickoff !== before) {
+    lines.push({ team: kickoff,
+      text: `kickoff · ${escapeHtml(shortTeamName(teamIds[kickoff]))}` });
+  }
+  return lines;
+}
+
+function logRowHtml(tick, line) {
+  const colour = line.team === null || line.team === undefined
+    ? "" : COLOURS.team[line.team];
+  const style = colour ? ` style="color:${colour};border-left-color:${colour}"` : "";
+  return `<div class="log-row${line.alert ? " alert" : ""}"${style}>` +
+    `<span class="at">${clockOf(tick)} · tick ${tick}</span>` +
+    `<span class="what">${line.text}</span></div>`;
+}
+
+/** Whether the reader is at the newest line, and so wants to stay there. */
+const atLogBottom = () =>
+  logBodyEl.scrollHeight - logBodyEl.scrollTop - logBodyEl.clientHeight < 24;
+
+function drawLog() {
+  logBodyEl.innerHTML = logRows.length
+    ? logRows.map((row) => row.html).join("")
+    : `<div class="log-empty">nothing yet — kickoffs, goals, fouls, turnovers` +
+      ` and policy failures land here as they happen</div>`;
+  logCountEl.textContent = logRows.length ? `${logRows.length}` : "";
+}
+
+function resetEventLog() {
+  logRows = [];
+  logCursor = -1;
+  drawLog();
+}
+
+function updateEventLog(index) {
+  if (index === logCursor) return;
+  // Scrubbed backwards: drop what the viewer has not reached again, so the log
+  // never claims to know something the pitch beside it has not shown yet.
+  if (index < logCursor) {
+    logRows = logRows.filter((row) => row.at <= index);
+    logCursor = index;
+    drawLog();
+    logBodyEl.scrollTop = logBodyEl.scrollHeight;
+    return;
+  }
+  const added = [];
+  for (let i = logCursor + 1; i <= index; i++) {
+    if (!frames[i]) continue;
+    for (const line of logLinesFor(i)) {
+      const html = logRowHtml(frames[i].frame.tick, line);
+      logRows.push({ at: i, html });
+      added.push(html);
+    }
+  }
+  logCursor = index;
+  if (!added.length) return;
+  // Appending beats redrawing: at 16x a hundred ticks can land in one frame,
+  // and the reader's scroll position has to survive it.
+  const stick = atLogBottom();
+  if (added.length === logRows.length) drawLog();
+  else {
+    logBodyEl.insertAdjacentHTML("beforeend", added.join(""));
+    logCountEl.textContent = `${logRows.length}`;
+  }
+  if (stick) logBodyEl.scrollTop = logBodyEl.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// The player inspector
+//
+// Click a player and this follows them: what the engine knows about that body
+// on this tick, plus what their controller said it was doing, plus the totals
+// the match has accumulated for them so far. It reads the authoritative frame
+// rather than the interpolated one, so every number is a value the simulation
+// actually held rather than a blend of two.
+// ---------------------------------------------------------------------------
+
+/** Keeps a floating inspector wholly inside the pitch container. */
+function positionFloatingInspector(reset = false) {
+  if (inspectorDocked || inspectorEl.classList.contains("hidden")) return;
+  const padding = 14;
+  const width = inspectorEl.offsetWidth;
+  const height = inspectorEl.offsetHeight;
+  const maxX = Math.max(padding, stageEl.clientWidth - width - padding);
+  const maxY = Math.max(padding, stageEl.clientHeight - height - padding);
+  if (reset || inspectorPosition === null) {
+    inspectorPosition = { x: maxX, y: padding };
+  }
+  inspectorPosition.x = Math.min(Math.max(inspectorPosition.x, padding), maxX);
+  inspectorPosition.y = Math.min(Math.max(inspectorPosition.y, padding), maxY);
+  inspectorEl.style.left = `${inspectorPosition.x}px`;
+  inspectorEl.style.top = `${inspectorPosition.y}px`;
+}
+
+/** Moves the same panel between the floating pitch layer and its dock row. */
+function setInspectorDocked(docked) {
+  inspectorDocked = docked;
+  inspectorEl.classList.toggle("floating", !docked);
+  inspectorEl.classList.toggle("docked", docked);
+  document.body.classList.toggle("inspector-is-docked", docked);
+  inspectorDockEl.textContent = docked ? "Float over field" : "Dock below";
+  inspectorDockEl.title = docked
+    ? "float player details over the pitch"
+    : "dock player details below the pitch";
+  if (docked) {
+    inspectorDockSlotEl.appendChild(inspectorEl);
+    inspectorEl.style.removeProperty("left");
+    inspectorEl.style.removeProperty("top");
+  } else {
+    stageEl.appendChild(inspectorEl);
+  }
+  requestAnimationFrame(() => {
+    resize();
+    if (!docked) positionFloatingInspector(true);
+  });
+}
+
+function finishInspectorDrag(event) {
+  if (!inspectorDrag || event.pointerId !== inspectorDrag.pointerId) return;
+  if (inspectorDragEl.hasPointerCapture?.(event.pointerId)) {
+    inspectorDragEl.releasePointerCapture(event.pointerId);
+  }
+  inspectorDrag = null;
+  inspectorEl.classList.remove("dragging");
+}
+
+inspectorDragEl.addEventListener("pointerdown", (event) => {
+  if (inspectorDocked || event.target.closest("button")) return;
+  const rect = inspectorEl.getBoundingClientRect();
+  inspectorDrag = {
+    pointerId: event.pointerId,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+  };
+  inspectorDragEl.setPointerCapture(event.pointerId);
+  inspectorEl.classList.add("dragging");
+  event.preventDefault();
+});
+inspectorDragEl.addEventListener("pointermove", (event) => {
+  if (!inspectorDrag || event.pointerId !== inspectorDrag.pointerId) return;
+  const stage = stageEl.getBoundingClientRect();
+  inspectorPosition = {
+    x: event.clientX - stage.left - inspectorDrag.offsetX,
+    y: event.clientY - stage.top - inspectorDrag.offsetY,
+  };
+  positionFloatingInspector();
+});
+inspectorDragEl.addEventListener("pointerup", finishInspectorDrag);
+inspectorDragEl.addEventListener("pointercancel", finishInspectorDrag);
+inspectorDockEl.addEventListener("click", () => setInspectorDocked(!inspectorDocked));
+
+/** Which player, if any, a point on the pitch picks out. */
+function playerAt(point, frame) {
+  if (!frame) return null;
+  // Generous, but never so generous that two players overlap: at a normal zoom
+  // a body is about 8 px across, which is a hard thing to hit exactly.
+  const reach = Math.max(
+    config?.player?.radius ?? 1, PICK_SLOP_PX / Math.max(projection.scale, 0.001));
+  let best = null;
+  let bestDistance = reach;
+  frame.players.forEach((player, index) => {
+    const distance = Math.hypot(
+      player.position.x - point.x, player.position.y - point.y);
+    if (distance <= bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+
+function select(index) {
+  if (selected === index) return;
+  selected = index;
+  totals = null;
+  if (index === null) {
+    inspectorEl.classList.add("hidden");
+    lastInspectorHtml = "";
+  }
+}
+
+const emptyTotals = (player) => ({
+  player, upTo: -1, distance: 0, kicks: 0, power: 0, rejected: 0,
+  reasons: {}, turnovers: 0, fouls: 0, goals: 0, ownGoals: 0, controlTicks: 0,
+  // The most recent kick and the most recent refusal, kept so both the panel
+  // and the pitch can show what a player just did rather than only what they
+  // are doing. A kick lasts one tick; at 4x that is not something anyone sees.
+  lastKick: null, lastRefusal: null,
+});
+
+/**
+ * Match totals for one player, up to and including frame `index`.
+ *
+ * A pure function of the frames received so far — but recomputing it from
+ * kickoff on every rendered frame would rescan the whole match sixty times a
+ * second, so the scan runs forwards and remembers where it got to. Changing
+ * the selection or seeking backwards starts it again, which is the only way
+ * these numbers can be wrong and is exactly when they are cheap to redo.
+ *
+ * Events are read from the frames they were attached to, so a replay recorded
+ * with a frame interval above 1 would undercount. Nothing writes one.
+ */
+function totalsFor(player, index) {
+  if (!totals || totals.player !== player || totals.upTo > index) {
+    totals = emptyTotals(player);
+  }
+  for (let i = totals.upTo + 1; i <= index; i++) {
+    const entry = frames[i];
+    const body = entry?.frame.players[player];
+    if (!body) break;
+    const before = i > 0 ? frames[i - 1]?.frame.players[player] : null;
+    if (before) {
+      totals.distance += Math.hypot(
+        body.position.x - before.position.x, body.position.y - before.position.y);
+    }
+    if (entry.frame.controlled && entry.frame.possession_player === player) {
+      totals.controlTicks += 1;
+    }
+    for (const event of entry.events) {
+      if (event.kind === "kick" && event.player === player) {
+        totals.kicks += 1;
+        totals.power += event.power || 0;
+        totals.lastKick = { ...event, tick: entry.frame.tick };
+      } else if (event.kind === "kick_rejected" && event.player === player) {
+        totals.rejected += 1;
+        totals.reasons[event.reason] = (totals.reasons[event.reason] || 0) + 1;
+        totals.lastRefusal = { ...event, tick: entry.frame.tick };
+      } else if (event.kind === "turnover" && event.player === player) {
+        totals.turnovers += 1;
+      } else if (event.kind === "foul" && event.player === player) {
+        totals.fouls += 1;
+      } else if (event.kind === "goal" && event.scorer === player) {
+        if (event.own_goal) totals.ownGoals += 1; else totals.goals += 1;
+      }
+    }
+    totals.upTo = i;
+  }
+  return totals;
+}
+
+/** One label-and-value line of the panel. */
+const row = (label, value) => `<div><span class="k">${label}</span>${value}</div>`;
+
+/**
+ * Escapes text for the panel.
+ *
+ * The role and status line come out of a student's debug payload, and the team
+ * names out of a replay header. Everything the canvas draws goes through
+ * fillText and cannot be markup; this panel is the one place a viewer writes
+ * any of it into the DOM, so it is the one place that has to say so.
+ */
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[character]));
+
+const fixed = (value, places = 1) => (value ?? 0).toFixed(places);
+const point = (p) => `${fixed(p.x)}, ${fixed(p.y)}`;
+
+/** How long ago something happened: ticks while that is still legible, then seconds. */
+function agoOf(ticks) {
+  const hz = config?.match?.simulation_hz ?? 20;
+  if (ticks <= 0) return "this tick";
+  if (ticks < hz) return `${ticks} tick${ticks === 1 ? "" : "s"} ago`;
+  return `${fixed(ticks / hz)} s ago`;
+}
+
+/**
+ * What a player was told to do this tick, in words.
+ *
+ * From replay format 3 the action itself is recorded, so this reports the
+ * decision rather than guessing at it from the body's motion — "asked to run
+ * and could not" and "asked for nothing" are different things and now read as
+ * different things. Older replays carry no action, and say so.
+ */
+function askedOf(frame, player) {
+  const action = frame.players[player]?.action;
+  if (!action) return { text: "not recorded", tone: "off" };
+
+  const throttle = Math.hypot(action.movement.x, action.movement.y);
+  const parts = [];
+  if (throttle <= 0.001) parts.push("hold position");
+  else if (throttle >= 0.995) parts.push("run");
+  else parts.push(`move at ${Math.round(throttle * 100)}%`);
+  if (action.kick_direction) {
+    parts.push(`kick ${fixed(action.kick_power, 2)}` +
+      (action.kick_angle_deg > 0 ? ` at ${fixed(action.kick_angle_deg, 0)}°` : ""));
+  }
+  return { text: parts.join(" + "), tone: action.kick_direction ? "on" : "" };
+}
+
+/**
+ * What became of that decision, which is not always the same thing.
+ *
+ * The events on this tick are the engine's own account of the kick; the body's
+ * speed is the rest of it. A player asked to run flat out and pinned against a
+ * team-mate reads as "standing", which is the true thing to say about it.
+ */
+function doingOf(entry, player) {
+  const frame = entry.frame;
+  const body = frame.players[player];
+  const maxSpeed = config?.player?.max_speed ?? 8;
+  const speed = Math.hypot(body.velocity.x, body.velocity.y);
+  const carrying = frame.controlled && frame.possession_player === player;
+
+  for (const event of entry.events) {
+    if (event.player !== player) continue;
+    if (event.kind === "kick") return { text: "struck the ball", tone: "on" };
+    if (event.kind === "kick_rejected") {
+      return { text: `kick refused · ${event.reason.replace(/_/g, " ")}`, tone: "warn" };
+    }
+  }
+  let motion = "standing";
+  if (speed > maxSpeed * 0.85) motion = "sprinting";
+  else if (speed > maxSpeed * 0.4) motion = "running";
+  else if (speed > maxSpeed * 0.08) motion = "walking";
+  if (carrying) {
+    return { text: motion === "standing" ? "shielding the ball" : `${motion} with the ball`,
+             tone: "on" };
+  }
+  return { text: motion, tone: motion === "standing" ? "off" : "" };
+}
+
+/** A player's annotations, from whichever of the two payloads is theirs. */
+function annotationsFor(entry, player) {
+  const perTeam = config?.match?.players_per_team ?? 5;
+  const decoded = payloadsFor(entry)[Math.floor(player / perTeam)];
+  if (!decoded) return {};
+  return {
+    role: decoded.roles[player],
+    target: decoded.targets[player],
+    race: decoded.race?.[player],
+    shot: decoded.shots.find((report) => report.player === player),
+    pass: decoded.passOptions.find((report) => report.player === player),
+    heat: decoded.heat?.players?.[player],
+    text: decoded.text,
+  };
+}
+
+function updateInspector(entry, index) {
+  if (selected === null) return;
+  const frame = entry.frame;
+  const player = frame.players[selected];
+  if (!player) { select(null); return; }
+
+  const perTeam = config?.match?.players_per_team ?? 5;
+  const team = Math.floor(selected / perTeam);
+  const slot = selected % perTeam;
+  const cooldown = player.kick_cooldown_ticks;
+  const speed = Math.hypot(player.velocity.x, player.velocity.y);
+  const heading = Math.atan2(player.facing.y, player.facing.x) * 180 / Math.PI;
+  const toBall = Math.hypot(
+    frame.ball_position.x - player.position.x,
+    frame.ball_position.y - player.position.y);
+  const kickRange = config?.player?.kick_range ?? 2.2;
+  const reachHeight = config?.player?.reach_height ?? 2.2;
+  const inRange = toBall <= kickRange;
+  // The same three tests obs.can_kick() makes, so a student watching this and
+  // a student reading their own logs see the same answer.
+  const overhead = !!config?.ball?.aerial && (frame.ball_height ?? 0) > reachHeight;
+  const canKick = inRange && cooldown === 0 && !overhead;
+  const hz = config?.match?.simulation_hz ?? 20;
+  const notes = annotationsFor(entry, selected);
+  const run = totalsFor(selected, index);
+
+  const rows = [
+    `<div class="who" style="color:${COLOURS.team[team]}">player ${selected}</div>`,
+    `<div class="whose">${escapeHtml(publicTeamName(teamIds[team]))} · ` +
+      `${slot === 0 ? "keeper" : "slot " + slot}</div>`,
+  ];
+  // Asked and doing, in that order and separately: the gap between them is
+  // where a team's bugs live.
+  const asked = askedOf(frame, selected);
+  const doing = doingOf(entry, selected);
+  rows.push(row("asked", `<span class="${asked.tone}">${asked.text}</span>`));
+  rows.push(row("doing", `<span class="${doing.tone}">${doing.text}</span>`));
+  if (notes.role !== undefined) rows.push(row("role", escapeHtml(notes.role)));
+  rows.push(row("position", point(player.position)));
+  rows.push(row("velocity", `${point(player.velocity)} &nbsp;<span class="off">` +
+    `${fixed(speed)} u/s</span>`));
+  rows.push(row("heading", `${fixed(heading, 0)}°`));
+  rows.push(row("kick", cooldown === 0
+    ? `<span class="on">ready</span>`
+    : `<span class="warn">${cooldown} tick${cooldown === 1 ? "" : "s"}</span>`));
+  rows.push(row("to ball", `${fixed(toBall)} <span class="off">/ ${fixed(kickRange)}` +
+    ` range</span>`));
+  rows.push(row("can kick", canKick
+    ? `<span class="on">yes</span>`
+    : `<span class="off">no${overhead ? " · overhead" : inRange ? "" : " · too far"}</span>`));
+  rows.push(row("on the ball", frame.controlled && frame.possession_player === selected
+    ? `<span class="on">yes</span>` : `<span class="off">no</span>`));
+  rows.push(row("phase", frame.phase[team]));
+  // The race, which is the answer to "why is that one going for it and not the
+  // one standing next to the ball". Reported in ticks and seconds because the
+  // controller decides in ticks and the eye judges in seconds.
+  if (notes.race && Number.isFinite(notes.race.eta)) {
+    rows.push(row("meets ball", `${Math.round(notes.race.eta)} ticks ` +
+      `<span class="off">${fixed(notes.race.eta / hz)} s</span>` +
+      (notes.race.go ? ` <span class="on">· going</span>` : "")));
+  }
+  if (notes.shot) {
+    const open = notes.shot.rays.filter((ray) => ray.open).length;
+    const best = notes.shot.rays.reduce((most, ray) => Math.max(most, ray.room), 0);
+    rows.push(row("sight of goal", notes.shot.chosen === null
+      ? `<span class="off">${open}/${notes.shot.rays.length} rays open · most room ${fixed(best)}</span>`
+      : `<span class="on">shooting</span> <span class="off">· ${open}/${notes.shot.rays.length} rays open</span>`));
+  }
+  if (notes.pass) {
+    const open = notes.pass.options.filter((option) => option.why === "open").length;
+    const taken = notes.pass.chosen === null ? null : notes.pass.options[notes.pass.chosen];
+    rows.push(row("passes on", `${open}/${notes.pass.options.length} open` +
+      (taken ? ` <span class="on">· to ${taken.mate}</span>` : ` <span class="off">· none played</span>`)));
+  }
+  if (notes.heat) {
+    rows.push(row("heatmap", `${escapeHtml(notes.heat.role)} <span class="off">· cell ` +
+      `${notes.heat.best} of ${notes.heat.cells.length}</span>`));
+  }
+  if (notes.target) rows.push(row("target", point(notes.target)));
+  if (notes.text) rows.push(row("says", escapeHtml(String(notes.text).slice(0, 60))));
+  // The last kick, whenever it was: a kick lasts one tick, so "kicking" is
+  // almost never the answer to "what did they just do with the ball".
+  if (run.lastKick) {
+    rows.push(row("last kick", `power ${fixed(run.lastKick.power, 2)} ` +
+      `<span class="off">${agoOf(frame.tick - run.lastKick.tick)}</span>`));
+  }
+  if (run.lastRefusal && frame.tick - run.lastRefusal.tick < hz * 2) {
+    rows.push(row("refused", `<span class="warn">` +
+      `${escapeHtml(run.lastRefusal.reason).replace(/_/g, " ")}</span>`));
+  }
+
+  rows.push(`<div class="sub">so far this match</div>`);
+  rows.push(row("distance", `${fixed(run.distance)} units`));
+  rows.push(row("kicks", run.kicks
+    ? `${run.kicks} <span class="off">mean power ${fixed(run.power / run.kicks, 2)}</span>`
+    : `<span class="off">0</span>`));
+  if (run.rejected) {
+    const reasons = Object.entries(run.reasons)
+      .map(([reason, count]) => `${count} ${escapeHtml(reason).replace(/_/g, " ")}`)
+      .join(", ");
+    rows.push(row("rejected", `<span class="warn">${run.rejected}</span> ` +
+      `<span class="off">${reasons}</span>`));
+  }
+  rows.push(row("won ball", String(run.turnovers)));
+  rows.push(row("at feet", `${fixed(run.controlTicks / hz)} s`));
+  if (run.goals) rows.push(row("goals", `<span class="on">${run.goals}</span>`));
+  if (run.ownGoals) rows.push(row("own goals", `<span class="warn">${run.ownGoals}</span>`));
+  if (run.fouls) {
+    rows.push(row("fouls", `<span class="warn">${run.fouls}</span> ` +
+      `<span class="off">kickoff encroachment</span>`));
+  }
+
+  const html = rows.join("");
+  if (html !== lastInspectorHtml) {
+    inspectorBodyEl.innerHTML = html;
+    inspectorEl.classList.remove("hidden");
+    lastInspectorHtml = html;
+    requestAnimationFrame(() => positionFloatingInspector());
+  }
+}
+
+const mix = (a, b, t) => a + (b - a) * t;
+const mixVec = (a, b, t) => ({ x: mix(a.x, b.x, t), y: mix(a.y, b.y, t) });
+
+/** Blends two snapshots for display. Discrete state comes from the earlier one. */
+function blend(current, next, t) {
+  if (!next || t <= 0) return current;
+  return {
+    ...current,
+    ball_position: mixVec(current.ball_position, next.ball_position, t),
+    ball_velocity: mixVec(current.ball_velocity, next.ball_velocity, t),
+    ball_height: mix(current.ball_height ?? 0, next.ball_height ?? 0, t),
+    ball_vertical_velocity: current.ball_vertical_velocity ?? 0,
+    players: current.players.map((player, index) => {
+      const other = next.players[index];
+      if (!other) return player;
+      return {
+        ...player,
+        position: mixVec(player.position, other.position, t),
+        velocity: mixVec(player.velocity, other.velocity, t),
+        facing: mixVec(player.facing, other.facing, t),
+      };
+    }),
+  };
+}
+
+function render() {
+  ctx.clearRect(0, 0, viewport.w, viewport.h);
+  if (!config) return;
+  computeProjection();
+  drawField();
+
+  const index = Math.min(Math.floor(position), frames.length - 1);
+  const entry = frames[index];
+  if (!entry) return;
+  const next = frames[index + 1];
+  // Overlays, roles and the panels stay on the authoritative frame; only the
+  // bodies are smoothed.
+  const drawn = blend(entry.frame, next?.frame, position - index);
+
+  // Under everything: it is a shading of the grass, not a mark on it.
+  drawHeatmap(entry, drawn);
+  drawDebug(entry, drawn);
+  drawTrajectory(drawn);
+  // Under the bodies, so a player is never hidden by their own intentions.
+  drawReasoning(entry, drawn);
+  drawIntent(entry, drawn, index);
+  drawPlayers(entry, drawn);
+  drawBall(drawn);
+  updateScoreboard(entry, index);
+  updateDiagnostics(entry);
+  updateEventLog(index);
+  updateInspector(entry, index);
+}
+
+// ---------------------------------------------------------------------------
+// Playback
+// ---------------------------------------------------------------------------
+
+function tick(now) {
+  const delta = Math.min((now - lastTime) / 1000, 0.25);
+  lastTime = now;
+
+  if (live && now - lastPoll > 200) {
+    lastPoll = now;
+    pollLive().catch(() => {});
+  }
+
+  const hz = config?.match?.simulation_hz ?? 20;
+  const newest = Math.max(frames.length - 1, 0);
+
+  if (live && following && frames.length) {
+    // Advance smoothly at the rate frames are arriving rather than jumping to
+    // the newest one each poll - polling every 200 ms would otherwise move the
+    // picture five times a second.
+    let advance = delta * hz * speed;
+    const behind = newest - position;
+    // If the stream has run ahead (a slow tab, a hitch), close the gap rather
+    // than drifting further behind for the rest of the match.
+    if (behind > hz * 1.5) advance += behind - hz * 1.5;
+    position = Math.min(position + advance, newest);
+  } else if (playing && frames.length > 1) {
+    position += delta * hz * speed;
+    if (position >= newest) {
+      position = newest;
+      if (!live) { playing = false; playEl.textContent = "Play"; }
+    }
+  }
+
+  const scrub = Math.round(position);
+  if (scrub !== lastScrub) {
+    scrubEl.value = String(scrub);
+    lastScrub = scrub;
+  }
+  render();
+  requestAnimationFrame(tick);
+}
+
+playEl.addEventListener("click", () => {
+  playing = !playing;
+  playEl.textContent = playing ? "Pause" : "Play";
+  // Resuming a live match rejoins the live edge rather than replaying from
+  // wherever it was paused.
+  following = live && playing;
+});
+document.getElementById("step").addEventListener("click", () => {
+  playing = false;
+  following = false;
+  playEl.textContent = "Play";
+  position = Math.min(position + 1, Math.max(frames.length - 1, 0));
+  scrubEl.value = String(position);
+});
+document.getElementById("speed").addEventListener("change", (event) => {
+  speed = parseFloat(event.target.value);
+});
+scrubEl.addEventListener("input", (event) => {
+  position = Number(event.target.value);
+  playing = false;
+  following = false;
+  playEl.textContent = "Play";
+});
+document.querySelectorAll("button[data-toggle]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const key = button.dataset.toggle;
+    show[key] = !show[key];
+    button.classList.toggle("on", show[key]);
+  });
+});
+window.addEventListener("keydown", (event) => {
+  if (event.code === "Space") { event.preventDefault(); playEl.click(); }
+  if (event.code === "ArrowRight") document.getElementById("step").click();
+  if (event.code === "ArrowLeft") {
+    playing = false; playEl.textContent = "Play";
+    position = Math.max(position - 1, 0);
+    scrubEl.value = String(position);
+  }
+  if (event.code === "Escape") select(null);
+});
+
+// Picking a player. The authoritative frame is hit-tested rather than the
+// interpolated one: what is under the cursor is what the panel will report.
+canvas.addEventListener("click", (event) => {
+  const entry = frames[Math.min(Math.floor(position), frames.length - 1)];
+  if (!entry) return;
+  select(playerAt(fieldPoint(event.clientX, event.clientY), entry.frame));
+});
+document.getElementById("inspector-close")
+  .addEventListener("click", () => select(null));
+canvas.addEventListener("mousemove", (event) => {
+  const entry = frames[Math.min(Math.floor(position), frames.length - 1)];
+  const over = entry
+    ? playerAt(fieldPoint(event.clientX, event.clientY), entry.frame) : null;
+  canvas.style.cursor = over === null ? "" : "pointer";
+});
+window.addEventListener("resize", () => {
+  resize();
+  positionFloatingInspector();
+});
+
+// ---------------------------------------------------------------------------
+// Sizing the pitch
+//
+// By default the pitch takes whatever the other panels leave it. That is the
+// right answer until it is not: a docked player panel and a long event log can
+// squeeze it on a laptop, and a tall window has height going spare. The grip
+// under the pitch sets the height by hand, and the choice is remembered the
+// way a window size would be — a viewer who wants a big pitch wants it for
+// every replay they open, not just this one.
+//
+// The height belongs to the container, not to the drawing: the projection
+// still fits the field to whatever room it is given, so the pitch keeps its
+// proportions and everything drawn on it scales with the container.
+// ---------------------------------------------------------------------------
+
+/** Small enough to be a glance at the pitch, large enough to still be one. */
+const PITCH_MIN_PX = 240;
+const PITCH_STORE_KEY = "soccer-viewer:pitch-height";
+
+const gripEl = document.getElementById("grip");
+// The pitch height in pixels, or null for "fill whatever is left over".
+let pitchHeight = null;
+let gripDrag = null;
+
+const clampPitch = (value) => Math.min(
+  Math.max(value, PITCH_MIN_PX), Math.max(window.innerHeight * 3, PITCH_MIN_PX));
+
+function applyPitchHeight(save = true) {
+  if (pitchHeight === null) {
+    document.body.style.removeProperty("--pitch-row");
+    document.body.classList.remove("pitch-sized");
+  } else {
+    document.body.style.setProperty("--pitch-row", `${Math.round(pitchHeight)}px`);
+    document.body.classList.add("pitch-sized");
+  }
+  // The canvas takes its size from the container, so it has to be re-read and
+  // redrawn now rather than on the next frame — mid-drag, the next frame is
+  // too late to be smooth.
+  resize();
+  positionFloatingInspector();
+  render();
+  if (!save) return;
+  try {
+    if (pitchHeight === null) localStorage.removeItem(PITCH_STORE_KEY);
+    else localStorage.setItem(PITCH_STORE_KEY, String(Math.round(pitchHeight)));
+  } catch (error) {
+    // Storage is refused on some origins and in private windows. Not being
+    // able to keep the setting between reloads is no reason to lose it now.
+  }
+}
+
+/** Hands the height back to the layout. */
+function fitPitch() {
+  pitchHeight = null;
+  applyPitchHeight();
+}
+
+function nudgePitch(delta) {
+  pitchHeight = clampPitch((pitchHeight ?? stageEl.offsetHeight) + delta);
+  applyPitchHeight();
+}
+
+/** Anything smaller than this is a tap that wandered, not a drag. */
+const GRIP_SLOP_PX = 3;
+// When the grip was last tapped without being dragged, for the double tap that
+// resets the height. Detected here rather than left to a dblclick event: the
+// grip captures the pointer for the duration of a drag, and a captured pointer
+// does not reliably produce the compatibility mouse events a double-click is
+// synthesised from — the reset simply never fired.
+let lastGripTap = 0;
+
+gripEl.addEventListener("pointerdown", (event) => {
+  gripEl.setPointerCapture(event.pointerId);
+  gripEl.classList.add("dragging");
+  // Measured from where the pitch actually is, so taking hold of the grip
+  // never jumps the height to some remembered value first. offsetHeight and
+  // not clientHeight: the row height it becomes includes the container's
+  // borders, and measuring without them walked the pitch 2px smaller on every
+  // drag.
+  gripDrag = { from: stageEl.offsetHeight, y: event.clientY };
+});
+gripEl.addEventListener("pointermove", (event) => {
+  if (!gripDrag) return;
+  pitchHeight = clampPitch(gripDrag.from + (event.clientY - gripDrag.y));
+  applyPitchHeight(false);
+});
+const endGripDrag = (event) => {
+  if (!gripDrag) return;
+  const dragged = Math.abs(event.clientY - gripDrag.y) > GRIP_SLOP_PX;
+  gripDrag = null;
+  gripEl.classList.remove("dragging");
+  if (dragged) {
+    applyPitchHeight();
+    lastGripTap = 0;
+    return;
+  }
+  // A tap on its own changes nothing; a second one within the double-click
+  // window hands the height back to the layout.
+  const now = performance.now();
+  if (now - lastGripTap < 400) {
+    fitPitch();
+    lastGripTap = 0;
+  } else {
+    lastGripTap = now;
+  }
+};
+gripEl.addEventListener("pointerup", endGripDrag);
+gripEl.addEventListener("pointercancel", endGripDrag);
+gripEl.addEventListener("keydown", (event) => {
+  const step = event.shiftKey ? 64 : 16;
+  if (event.key === "ArrowDown") nudgePitch(step);
+  else if (event.key === "ArrowUp") nudgePitch(-step);
+  else if (event.key === "Home") fitPitch();
+  else return;
+  event.preventDefault();
+});
+
+// ---------------------------------------------------------------------------
+
+resize();
+try {
+  const stored = Number(localStorage.getItem(PITCH_STORE_KEY));
+  if (Number.isFinite(stored) && stored > 0) pitchHeight = clampPitch(stored);
+} catch (error) {
+  // No storage, no remembered height. The layout's own answer is a good one.
+}
+// ?pitch=N opens with the pitch that tall, the same way ?speed=N opens at a
+// rate: a link can carry the shape of the view as well as the moment it shows.
+// It is not saved — a link should not quietly redecorate the next replay.
+if (params.get("pitch") !== null) {
+  const requested = Number(params.get("pitch"));
+  if (Number.isFinite(requested) && requested > 0) pitchHeight = clampPitch(requested);
+}
+applyPitchHeight(false);
+drawLog();
+// ?player=N opens with the inspector already following someone, the same way
+// ?frame=N opens on a moment: between them a specific incident can be linked
+// to — "player 3, tick 300" — rather than described.
+if (params.get("player") !== null) {
+  const requested = Number(params.get("player"));
+  if (Number.isInteger(requested) && requested >= 0) select(requested);
+}
+if (params.get("live")) {
+  live = true;
+  statusEl.textContent = "live · waiting for the simulator";
+  pollLive().catch(() => fail("could not reach the launcher"));
+} else if (params.get("replay")) {
+  loadReplay(params.get("replay")).catch(() => fail("could not load the replay"));
+} else {
+  fail("Nothing to show. Open this from the launcher, or add ?replay=NAME.");
+}
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

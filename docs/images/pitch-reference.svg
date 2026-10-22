@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-88 -62 176 114" width="1232" height="798" role="img" aria-label="The soccer pitch in the canonical frame, with the centre spot, both goal mouths, the corners and a player drawn to scale.">
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#ffd640"/></marker>
+</defs>
+<rect x="-88" y="-62" width="176" height="114" fill="#12151a"/>
+<rect x="-50" y="-30" width="100" height="60" fill="#1c5c2e"/>
+<rect x="-50" y="-30" width="10" height="60" fill="#206634"/>
+<rect x="-30" y="-30" width="10" height="60" fill="#206634"/>
+<rect x="-10" y="-30" width="10" height="60" fill="#206634"/>
+<rect x="10" y="-30" width="10" height="60" fill="#206634"/>
+<rect x="30" y="-30" width="10" height="60" fill="#206634"/>
+<rect x="-50" y="-30" width="100" height="60" fill="none" stroke="#ebf0eb" stroke-width="0.5"/>
+<line x1="0" y1="30" x2="0" y2="-30" stroke="#ebf0eb" stroke-width="0.5"/>
+<circle cx="0" cy="-0" r="9" fill="none" stroke="#ebf0eb" stroke-width="0.5"/>
+<circle cx="0" cy="-0" r="0.7" fill="#ebf0eb"/>
+<rect x="-53" y="-7" width="3" height="14" fill="none" stroke="#3884ff" stroke-width="0.5"/>
+<line x1="-50" y1="7" x2="-50" y2="-7" stroke="#3884ff" stroke-width="1.4"/>
+<rect x="50" y="-7" width="3" height="14" fill="none" stroke="#f05448" stroke-width="0.5"/>
+<line x1="50" y1="7" x2="50" y2="-7" stroke="#f05448" stroke-width="1.4"/>
+<line x1="-26" y1="18.6" x2="26" y2="18.6" stroke="#ffd640" stroke-width="0.6" marker-end="url(#arrow)"/>
+<text x="0" y="15.4" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.8" fill="#ffd640" font-weight="600" stroke="#1c5c2e" stroke-width="0.784" stroke-linejoin="round" paint-order="stroke">forward is +x — you always attack this way</text>
+<text x="0" y="23" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal" stroke="#1c5c2e" stroke-width="0.672" stroke-linejoin="round" paint-order="stroke">attack_direction is +1.0 for both teams</text>
+<line x1="-44" y1="-5.4" x2="-44" y2="-18.6" stroke="#ffd640" stroke-width="0.5" marker-end="url(#arrow)"/>
+<text x="-41.4" y="-17.6" text-anchor="start" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.6" fill="#ffd640" font-weight="600" stroke="#1c5c2e" stroke-width="0.728" stroke-linejoin="round" paint-order="stroke">+y</text>
+<circle cx="-25" cy="-16.5" r="2.2" fill="none" stroke="#ffffff" stroke-width="0.3" stroke-dasharray="1.2 1.0"/>
+<circle cx="-25" cy="-16.5" r="1" fill="#3884ff" stroke="#ebf0eb" stroke-width="0.25"/>
+<text x="0" y="-57" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="4" fill="#e6eaf0" font-weight="600">The canonical frame — every team sees the pitch this way</text>
+<text x="0" y="-52" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.8" fill="#8d97a8" font-weight="normal">whichever end it was actually assigned</text>
+<text x="-54" y="-10" text-anchor="end" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#3884ff" font-weight="600">YOUR GOAL</text>
+<text x="-54" y="-6.4" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">field.my_goal</text>
+<text x="-54" y="-2.8" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">= (-50.0, 0.0)</text>
+<text x="-54" y="0.8" text-anchor="end" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">you defend this end</text>
+<line x1="-53" y1="-9" x2="-49.2" y2="-1" stroke="#3884ff" stroke-width="0.28"/>
+<circle cx="-49.2" cy="-1" r="0.55" fill="#3884ff"/>
+<text x="54" y="-10" text-anchor="start" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#f05448" font-weight="600">THEIR GOAL</text>
+<text x="54" y="-6.4" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">field.opponent_goal</text>
+<text x="54" y="-2.8" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">= (+50.0, 0.0)</text>
+<text x="54" y="0.8" text-anchor="start" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">shoot at this end</text>
+<line x1="53" y1="-9" x2="49.2" y2="-1" stroke="#f05448" stroke-width="0.28"/>
+<circle cx="49.2" cy="-1" r="0.55" fill="#f05448"/>
+<text x="-28" y="-43" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#e6eaf0" font-weight="600">centre circle</text>
+<text x="-28" y="-39.4" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">no kickoff formation may</text>
+<text x="-28" y="-35.8" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">start a player inside it</text>
+<line x1="-20" y1="-34.4" x2="-6.363" y2="-6.363" stroke="#8d97a8" stroke-width="0.28"/>
+<circle cx="-6.363" cy="-6.363" r="0.55" fill="#8d97a8"/>
+<text x="21" y="-43" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#e6eaf0" font-weight="600">centre spot</text>
+<text x="21" y="-39.4" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">(0.0, 0.0) — the origin</text>
+<text x="21" y="-35.8" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">every position is measured from here</text>
+<line x1="12" y1="-34.4" x2="1.2" y2="-1.2" stroke="#8d97a8" stroke-width="0.28"/>
+<circle cx="1.2" cy="-1.2" r="0.55" fill="#8d97a8"/>
+<text x="54" y="-39" text-anchor="start" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#e6eaf0" font-weight="600">corner</text>
+<text x="54" y="-35.4" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">(+50.0, +30.0)</text>
+<text x="54" y="-31.8" text-anchor="start" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">pitch is 100.0 x 60.0</text>
+<line x1="53" y1="-38" x2="49.2" y2="-29.2" stroke="#8d97a8" stroke-width="0.28"/>
+<circle cx="49.2" cy="-29.2" r="0.55" fill="#8d97a8"/>
+<text x="-54" y="-39" text-anchor="end" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#e6eaf0" font-weight="600">a player, to scale</text>
+<text x="-54" y="-35.4" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">player_radius 1.0</text>
+<text x="-54" y="-31.8" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">kick_range 2.2</text>
+<line x1="-53" y1="-38" x2="-27.8" y2="-17.5" stroke="#8d97a8" stroke-width="0.28"/>
+<circle cx="-27.8" cy="-17.5" r="0.55" fill="#8d97a8"/>
+<text x="-54" y="9" text-anchor="end" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#7ce0a0" font-weight="600">the goal mouth</text>
+<text x="-54" y="12.6" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">goal_width 14.0</text>
+<text x="-54" y="16.2" text-anchor="end" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">a shot scores when the ball</text>
+<text x="-54" y="19.8" text-anchor="end" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">crosses at |y| &lt;= 7.0</text>
+<line x1="-53" y1="8" x2="-49.4" y2="6.6" stroke="#7ce0a0" stroke-width="0.28"/>
+<circle cx="-49.4" cy="6.6" r="0.55" fill="#7ce0a0"/>
+<text x="54" y="9" text-anchor="start" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#e6eaf0" font-weight="600">the goal line</text>
+<text x="54" y="12.6" text-anchor="start" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.5" fill="#ffd640" font-weight="normal">x = +/-50.0</text>
+<text x="54" y="16.2" text-anchor="start" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">bodies are held inside it;</text>
+<text x="54" y="19.8" text-anchor="start" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">only the ball crosses</text>
+<line x1="53" y1="8" x2="49.4" y2="18.6" stroke="#8d97a8" stroke-width="0.28"/>
+<circle cx="49.4" cy="18.6" r="0.55" fill="#8d97a8"/>
+<text x="0" y="37" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="3" fill="#e6eaf0" font-weight="600">the boundary is solid</text>
+<text x="0" y="41.4" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">the ball rebounds off it and bodies are held inside it — there are no throw-ins,</text>
+<text x="0" y="45" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="2.4" fill="#8d97a8" font-weight="normal">corners, goal kicks or offside, and play never stops</text>
+<text x="0" y="49" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="2.2" fill="#8d97a8" font-weight="normal">generated by tools/pitch_diagram.py from configs/default.toml</text>
+</svg>

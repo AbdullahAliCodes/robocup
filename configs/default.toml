@@ -1,0 +1,159 @@
+# The course profile: the rules matches actually use.
+#
+# This started as Appendix A of the technical design document and differs from
+# it in exactly two values, both in [phase] and both explained where they
+# appear. configs/appendix-a.toml preserves the specification unchanged, so
+# results recorded against it stay reproducible.
+#
+# Changing any value here changes the configuration hash, which is what makes a
+# result reproducible. Tune between cohorts, never mid-course.
+#
+# Keys marked "(extension)" were not in the appendix; each has a compile-time
+# default so a file containing only the appendix keys still parses.
+#
+# The engine works in field units with the origin at the centre spot:
+#   x in [-width/2, +width/2], y in [-height/2, +height/2]
+#   team 0 defends the -x goal and attacks +x
+#   team 1 defends the +x goal and attacks -x
+# The student SDK exposes normalised, team-relative helpers on top of this.
+
+[match]
+players_per_team = 5
+simulation_hz = 20
+max_ticks = 2400
+seed = 1234
+# (extension) maximum per-axis displacement, in field units, applied to each
+# player's kickoff position from the match RNG. This is what makes a seed
+# change the match: without it, two deterministic controllers play the same
+# game for every seed and evaluating over a seed set reports one result many
+# times. Set to 0.0 for a fixed formation.
+kickoff_jitter = 1.5
+
+[field]
+width = 100.0
+height = 60.0
+goal_width = 14.0
+# (extension) crossbar height. Read only when [ball].aerial is set: with the
+# ball confined to the ground plane, every shot is under the bar anyway.
+goal_height = 3.0
+
+[player]
+radius = 1.0
+max_speed = 8.0
+acceleration = 20.0
+kick_range = 2.2
+kick_cooldown_ticks = 5
+# (extension) multiplicative velocity retention per tick; makes players coast to
+# a stop when no movement is requested instead of drifting forever.
+damping_per_tick = 0.90
+# (extension) ball speed added by a full-power kick, in field units per second.
+kick_impulse = 22.0
+# (extension) restitution used when two players are separated after an overlap.
+collision_restitution = 0.35
+# (extension) steepest kick a player may request, in degrees above the ground.
+# 45 is the range-maximising angle, so allowing more would only ever produce
+# shorter, higher kicks. Aerial play only.
+max_kick_elevation_deg = 45.0
+# (extension) how high a player can play the ball. A ball whose centre is above
+# this cannot be kicked, controlled or bounced off a body - it flies over.
+# Aerial play only.
+reach_height = 2.2
+
+[ball]
+radius = 0.45
+friction_per_tick = 0.985
+max_speed = 30.0
+# (extension) energy retained when the ball rebounds off a boundary.
+wall_restitution = 0.75
+# (extension) energy retained when the ball rebounds off a player body.
+#
+# Load-bearing for possession, not just for feel: after contact the ball leaves
+# at restitution * closing_speed relative to the player, and control requires
+# that to be at or under phase.control_relative_speed (4.0). At player.max_speed
+# (8.0) anything from 0.5 up means a sprinting player can never gain control,
+# possession never leaves the kickoff team, and the attack/defend phase never
+# switches. Keep this comfortably below 0.5.
+player_restitution = 0.25
+
+# --- aerial play -----------------------------------------------------------
+#
+# Off here, and off in the built-in defaults. With it off the ball is confined
+# to the ground plane exactly as it always has been, the simulator takes the
+# same code path it took before aerial play existed, and the seven values below
+# are excluded from the configuration hash - so this profile hashes to what it
+# hashed to before the feature was added, and every result recorded against it
+# stays reproducible.
+#
+# configs/aerial.toml is this profile with the switch flipped. Scores are not
+# comparable between the two: they are different games.
+#
+# (extension) master switch.
+aerial = false
+# (extension) downward acceleration, field units per second squared. The
+# engine's units are metric in all but name - a 100x60 pitch, an 8 unit/s
+# sprint, a 22 unit/s kick - so this is real gravity, and flight times come out
+# at football values: a full-power kick at 45 degrees peaks around 12 units up
+# and carries about 49.
+gravity = 9.81
+# (extension) vertical speed kept per bounce off the turf. A football on grass
+# returns to roughly a third of the height it fell from, which is this squared.
+bounce_restitution = 0.55
+# (extension) horizontal speed kept through a bounce, so a ball landing pulls
+# up rather than skidding on at the speed it arrived.
+bounce_friction = 0.80
+# (extension) horizontal drag per tick while airborne, replacing
+# friction_per_tick for as long as the ball is off the ground: rolling
+# resistance does not apply to a ball that is touching nothing. Over a
+# three-second flight this gives up about a tenth of the ball's speed, against
+# the two thirds it would lose rolling the same distance.
+air_friction_per_tick = 0.998
+
+[phase]
+# --- tuned; Appendix A specifies 1.8 and 4.0 -------------------------------
+#
+# A player is judged to be in control when they are within control_radius of the
+# ball AND moving with it to within control_relative_speed. At the specified
+# values control almost never happened - well under 1% of ticks - and everything
+# downstream of it degraded: the attack/defend phase barely switched, so half of
+# every submission went uncalled, and tackles were unmeasurable.
+#
+# Two causes, and the second is the larger:
+#
+#   control_radius 1.8 < player.kick_range 2.2, so a player could kick the ball
+#   from outside the distance at which they could be judged to hold it. Raising
+#   it to match kick_range removes that contradiction: if you can play it, you
+#   have it.
+#
+#   control_relative_speed 4.0 was the binding constraint. Policies kick often,
+#   so the ball is rarely slow relative to a player, and the proximity test
+#   never got a chance. Raising it to 8.0 - equal to player.max_speed, i.e. "the
+#   ball is not moving faster than a player could run" - is the change that
+#   actually made control happen.
+#
+# Measured over six structured_attack vs balanced matches:
+#
+#   radius  rel speed   ball at feet   phase switches   tackles
+#      1.8        4.0           0.9%               13       0/4
+#      2.2        4.0           1.7%               11       0/4
+#      1.8        8.0           2.2%               21      1/12
+#      2.2        8.0           3.9%               26      2/15
+#
+# Raising them further keeps increasing control but starts to distort play:
+# possession becomes sticky and scoring falls away.
+control_radius = 2.2
+control_relative_speed = 8.0
+# ---------------------------------------------------------------------------
+hysteresis_ticks = 3
+
+[evaluation]
+per_decision_timeout_ms = 20
+record_replays = "failures_and_samples"
+# (extension) consecutive failed decisions before a team forfeits the match.
+max_consecutive_failures = 20
+# (extension) upper bound on the serialised size of a team's debug payload.
+max_debug_bytes = 8192
+# (extension) how long a kick stays "in flight" for the pass and dribble
+# metrics. A ball nobody has reached within this many ticks is a loose ball, not
+# a pass. Metric bookkeeping only - it does not affect play, and [evaluation] is
+# excluded from the configuration hash.
+touch_timeout_ticks = 100
